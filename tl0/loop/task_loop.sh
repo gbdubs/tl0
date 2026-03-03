@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# task-loop — Continuously claim tasks, implement them in worktrees, merge back.
+# tl0 loop — Continuously claim tasks, implement them in worktrees, merge back.
 #
 # Usage:
-#   ./scripts/task-loop                     # Run with defaults
-#   ./scripts/task-loop --model sonnet      # Only pick up sonnet tasks
-#   ./scripts/task-loop --tag area:api      # Only pick up tasks with this tag
-#   ./scripts/task-loop --once              # Run one task then exit
-#   ./scripts/task-loop --max-tasks 5       # Run up to 5 tasks then exit
-#   ./scripts/task-loop --dry-run           # Show what would be done, don't do it
-#   ./scripts/task-loop --resume UUID       # Resume a preserved task (skip claude, just merge)
+#   tl0 loop                              # Run with defaults
+#   tl0 loop --model sonnet               # Only pick up sonnet tasks
+#   tl0 loop --tag area:api               # Only pick up tasks with this tag
+#   tl0 loop --once                       # Run one task then exit
+#   tl0 loop --max-tasks 5                # Run up to 5 tasks then exit
+#   tl0 loop --dry-run                    # Show what would be done, don't do it
+#   tl0 loop --resume UUID                # Resume a preserved task (skip claude, just merge)
+#   tl0 loop --prompt /path/to/prompt.md  # Custom execution prompt
 #
 # Each iteration:
 #   1. Pulls latest main from origin
@@ -41,10 +42,8 @@ alert_on_exit() {
     echo "!!! $(date)                                     !!!"
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
-    # Audible alert — terminal bell + macOS say + system sound
     printf '\a\a\a'
     osascript -e 'display notification "Task loop died!" with title "TASK LOOP DOWN" sound name "Sosumi"' 2>/dev/null || true
-    # Random Hamlet death quotes for dramatic flair
     HAMLET_DEATH_LINES=(
       "To die, to sleep. To sleep, perchance to dream."
       "The rest is silence."
@@ -63,13 +62,59 @@ alert_on_exit() {
 }
 trap alert_on_exit EXIT
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TOOLS_CMD="tl0"
-CODE_REPO="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)"
+# Resolve the code repo from the current working directory
+CODE_REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Error: must be run from within a git repository." >&2
+  EXPECTED_EXIT=true; exit 1
+}
 WORKTREE_BASE="$CODE_REPO/.task-worktrees"
-TASK_PROMPT="${TL0_EXEC_PROMPT:-$(dirname "$0")/../../../claude/prompts/execute-task.md}"
 AGENT_ID="task-loop-$$"
+
+# Resolve the execution prompt. Priority:
+# 1. --prompt CLI arg (set below during arg parsing)
+# 2. TL0_EXEC_PROMPT env var
+# 3. tl0.json execution.prompt (relative to repo root)
+# 4. Bundled default in tl0 package
+TL0_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUNDLED_PROMPT="$TL0_SCRIPT_DIR/../prompts/execute-task.md"
+
+resolve_prompt() {
+  # Already set by --prompt arg
+  if [[ -n "${TASK_PROMPT:-}" ]]; then
+    return
+  fi
+  # Env var
+  if [[ -n "${TL0_EXEC_PROMPT:-}" ]]; then
+    TASK_PROMPT="$TL0_EXEC_PROMPT"
+    return
+  fi
+  # tl0.json execution.prompt
+  local config_prompt
+  config_prompt=$(python3 -c "
+import json, pathlib, sys
+p = pathlib.Path('$CODE_REPO')
+for d in [p] + list(p.parents):
+    f = d / 'tl0.json'
+    if f.exists():
+        cfg = json.loads(f.read_text())
+        ep = cfg.get('execution', {}).get('prompt', '')
+        if ep:
+            print((d / ep).resolve())
+            sys.exit(0)
+        break
+" 2>/dev/null || true)
+  if [[ -n "$config_prompt" ]] && [[ -f "$config_prompt" ]]; then
+    TASK_PROMPT="$config_prompt"
+    return
+  fi
+  # Bundled default
+  if [[ -f "$BUNDLED_PROMPT" ]]; then
+    TASK_PROMPT="$BUNDLED_PROMPT"
+    return
+  fi
+  echo "Error: no execution prompt found. Use --prompt, TL0_EXEC_PROMPT, or set execution.prompt in tl0.json." >&2
+  EXPECTED_EXIT=true; exit 1
+}
 
 # Defaults
 MODEL_FILTER=""
@@ -79,6 +124,7 @@ MAX_TASKS=0  # 0 = unlimited
 DRY_RUN=false
 POLL_INTERVAL=30
 RESUME_TASK_ID=""
+TASK_PROMPT=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -91,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     --poll)       POLL_INTERVAL="$2"; shift 2 ;;
     --agent)      AGENT_ID="$2"; shift 2 ;;
     --resume)     RESUME_TASK_ID="$2"; shift 2 ;;
+    --prompt)     TASK_PROMPT="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,/^$/s/^# *//p' "$0"
       EXPECTED_EXIT=true; exit 0
@@ -98,6 +145,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown arg: $1" >&2; EXPECTED_EXIT=true; exit 1 ;;
   esac
 done
+
+resolve_prompt
 
 log()  { echo "[$(date +%H:%M:%S)] $*"; }
 warn() { echo "[$(date +%H:%M:%S)] WARN: $*" >&2; }
@@ -121,36 +170,30 @@ cleanup_worktree() {
 }
 
 pull_main() {
-  # Abort any in-progress merge/rebase left by a previous crash
   git -C "$CODE_REPO" merge --abort 2>/dev/null || true
   git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
-
   git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
 
   if ! git -C "$CODE_REPO" pull --ff-only --quiet origin main 2>/dev/null; then
-    # ff-only failed (diverged local main) — hard-reset to match origin.
-    # Avoid pull --rebase here: it silently drops merge commits, which can
-    # leave orphaned files in the working tree and cause later ff merges to
-    # fail with "untracked working tree files would be overwritten".
     warn "Fast-forward pull of main failed. Resetting to origin/main..."
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
   fi
 }
 
-# After merging main into a task branch, regenerate derived files so they
-# reflect the combined dependency tree rather than a textual merge of JSON.
 reconcile_generated_files() {
   local wt="$1"
-  log "    Reconciling generated files (npm install)..."
-  (cd "$wt" && npm install --package-lock-only --ignore-scripts > /dev/null 2>&1) || true
-  if [ -n "$(git -C "$wt" status --porcelain package-lock.json 2>/dev/null)" ]; then
-    git -C "$wt" add package-lock.json 2>/dev/null
-    git -C "$wt" commit -m "chore: regenerate package-lock.json after merge" 2>/dev/null || true
+  # Check for package.json (Node.js project)
+  if [ -f "$wt/package.json" ] && command -v npm &>/dev/null; then
+    log "    Reconciling generated files (npm install)..."
+    (cd "$wt" && npm install --package-lock-only --ignore-scripts > /dev/null 2>&1) || true
+    if [ -n "$(git -C "$wt" status --porcelain package-lock.json 2>/dev/null)" ]; then
+      git -C "$wt" add package-lock.json 2>/dev/null
+      git -C "$wt" commit -m "chore: regenerate package-lock.json after merge" 2>/dev/null || true
+    fi
   fi
 }
 
-# Print instructions for resuming a failed task.
 print_resume_instructions() {
   local task_id="$1"
   local short_id="$2"
@@ -165,22 +208,20 @@ print_resume_instructions() {
   echo "  Branch: $branch"
   echo ""
   echo "  To resume (merge only, skip claude):"
-  echo "    ./scripts/task-loop --resume $task_id"
+  echo "    tl0 loop --resume $task_id"
   echo ""
   echo "  To resume with claude re-run:"
   echo "    git worktree add $WORKTREE_BASE/$short_id $branch"
   echo "    cd $WORKTREE_BASE/$short_id && claude -p ..."
   echo ""
   echo "  To abandon:"
-  echo "    ./scripts/tasks free $task_id"
+  echo "    tl0 free $task_id"
   echo "    git branch -D $branch"
   echo "    git push origin --delete $branch 2>/dev/null"
   echo "========================================================"
   echo ""
 }
 
-# Attempt to merge main into the task branch in the worktree.
-# Returns 0 on success, 1 on unresolvable conflict.
 merge_main_into_branch() {
   local worktree="$1"
   local short_id="$2"
@@ -191,7 +232,6 @@ merge_main_into_branch() {
     return 0
   fi
 
-  # Merge conflict — have claude resolve it
   log "    Merge conflict detected. Asking claude to resolve..."
   local resolve_exit=0
   (cd "$worktree" && claude -p \
@@ -200,7 +240,6 @@ merge_main_into_branch() {
     "There are merge conflicts after merging main into this task branch. Resolve all conflicts, then commit. Run 'git diff --name-only --diff-filter=U' to see conflicted files. For each one, read it, resolve the conflict markers, and 'git add' it. Then 'git commit --no-edit'."
   ) || resolve_exit=$?
 
-  # Check if conflicts were resolved
   local unmerged
   unmerged=$(git -C "$worktree" diff --name-only --diff-filter=U 2>/dev/null | wc -l | tr -d ' ')
   if [ "$unmerged" -ne 0 ]; then
@@ -212,34 +251,18 @@ merge_main_into_branch() {
   return 0
 }
 
-# Merge a task branch into main and push. Retries on parallel advancement.
-# Returns 0 on success, 1 on failure.
 merge_and_push() {
   local worktree="$1"
   local short_id="$2"
   local branch="$3"
   local model="$4"
 
-  # Single unified loop: each attempt fetches the latest main, fast-forward
-  # merges the task branch (re-merging main into the task branch if needed),
-  # and then pushes.  A push rejection or ff failure loops back to the top so
-  # that the next attempt re-merges freshly from the new origin/main.
-  #
-  # Previous design had separate merge (max 5) and push (max 3) retry loops.
-  # The push loop could not trigger a re-merge when origin advanced between
-  # the local ff-merge and the push, so it exhausted its 3 attempts and gave
-  # up even though re-merging would have succeeded.
   local max_attempts=20
   local pushed=false
 
   for attempt in $(seq 1 $max_attempts); do
     log "    Merge+push attempt $attempt/$max_attempts..."
 
-    # Ensure CODE_REPO working tree is clean and on latest main.
-    # A previous failed ff-only or aborted rebase can leave untracked/dirty
-    # files that cause subsequent ff merges to fail at the checkout stage
-    # (git prints "Updating X..Y" but returns exit 1, with the real error
-    # hidden by 2>/dev/null).
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
     git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
@@ -247,15 +270,11 @@ merge_and_push() {
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-    # Try fast-forward first (ideal — clean linear history).
     if git -C "$CODE_REPO" merge --ff-only "$branch" 2>/dev/null; then
-      # FF succeeded — try to push.
       if git -C "$CODE_REPO" push origin main 2>/dev/null; then
         pushed=true
         break
       fi
-      # Push rejected — another loop pushed between our ff-merge and push.
-      # Reset and loop back to re-merge from the new origin/main.
       warn "Push rejected (attempt $attempt/$max_attempts). Resetting and retrying..."
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
@@ -263,7 +282,6 @@ merge_and_push() {
       continue
     fi
 
-    # FF failed — need to merge main into task branch first.
     log "    Fast-forward not possible. Merging latest main into task branch..."
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
@@ -274,14 +292,10 @@ merge_and_push() {
     fi
     reconcile_generated_files "$worktree"
 
-    # After merging main into the branch, fetch again (main may have moved
-    # during the merge) and try ff-only + push.
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
 
     if ! git -C "$CODE_REPO" merge --ff-only "$branch" 2>/dev/null; then
-      # Another parallel loop pushed while we were merging. Loop back so the
-      # next attempt re-merges from the new main tip.
       log "    FF still failed after re-merging. Retrying in ~3s..."
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
@@ -294,7 +308,6 @@ merge_and_push() {
       break
     fi
 
-    # Push rejected after a successful re-merge — loop back.
     warn "Push rejected after re-merge (attempt $attempt/$max_attempts). Retrying..."
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
@@ -302,7 +315,6 @@ merge_and_push() {
   done
 
   if ! $pushed; then
-    # Clean up any in-progress merge/rebase state on the main repo
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
@@ -319,8 +331,8 @@ run_task() {
   local task_id model thinking title short_id branch worktree
 
   task_id=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-  model=$(echo "$task_json"   | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['model'])")
-  thinking=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['thinking'])")
+  model=$(echo "$task_json"   | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('model', 'sonnet'))")
+  thinking=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking', False))")
   title=$(echo "$task_json"   | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['title'][:60])")
   short_id="${task_id:0:8}"
   branch="task/$short_id"
@@ -346,9 +358,7 @@ run_task() {
 
   if $skip_claude; then
     # --- Resume mode: use existing branch ---
-    # Check if worktree already exists
     if [ ! -d "$worktree" ]; then
-      # Try to set up worktree from existing branch
       if git -C "$CODE_REPO" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
         git -C "$CODE_REPO" worktree add --quiet "$worktree" "$branch" 2>/dev/null || {
           warn "Failed to create worktree from existing branch."
@@ -367,7 +377,6 @@ run_task() {
     fi
   else
     # --- Create worktree ---
-    # Clean up stale remnants from previous attempts (crashed loop, etc.)
     cleanup_worktree "$short_id"
 
     if ! git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" main 2>/dev/null; then
@@ -395,7 +404,7 @@ AGENT_ID=$AGENT_ID"
     fi
   fi
 
-  # --- Read result summary (claude writes this instead of marking done) ---
+  # --- Read result summary ---
   local result_text=""
   if [ -f "$worktree/.task-result.txt" ]; then
     result_text=$(cat "$worktree/.task-result.txt")
@@ -407,31 +416,26 @@ AGENT_ID=$AGENT_ID"
 
   if [ "$commit_count" -eq 0 ]; then
     if [ -n "$result_text" ]; then
-      # No commits but result file exists — this is a read-only task (verify, review, decompose).
-      # Skip merge, mark done directly.
       tl0 done "$task_id" --result "$result_text" 2>/dev/null \
         || warn "Failed to mark task done. May need manual completion."
       cleanup_worktree "$short_id"
       return 0
     else
       warn "No commits on branch and no result file. Task may have failed."
-      # Preserve the branch in case claude did useful work that wasn't committed
       git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
       print_resume_instructions "$task_id" "$short_id" "$branch" "Claude produced no commits or result"
-      # Don't free — leave claimed so user can investigate
       return 1
     fi
   fi
 
-  # --- Stash uncommitted changes (e.g. package-lock.json left by npm install) ---
-  # Git refuses to merge if uncommitted changes overlap with incoming changes.
+  # --- Stash uncommitted changes ---
   local stashed=false
   if [ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]; then
     log "    Stashing uncommitted changes before merge..."
     git -C "$worktree" stash push -u -m "task-loop: pre-merge stash" 2>/dev/null && stashed=true
   fi
 
-  # --- Merge main into the task branch (resolve conflicts on the branch, not main) ---
+  # --- Merge main into the task branch ---
   log "    Pulling latest main and merging into task branch..."
   pull_main
 
@@ -448,10 +452,8 @@ AGENT_ID=$AGENT_ID"
   if $stashed; then
     log "    Restoring stashed changes..."
     git -C "$worktree" stash pop 2>/dev/null || true
-    # Commit any restored changes so the branch is clean for ff-merge
     if [ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]; then
       git -C "$worktree" add -A 2>/dev/null
-      # Never commit .task-result.txt — it causes merge conflicts across parallel loops
       git -C "$worktree" reset HEAD .task-result.txt 2>/dev/null || true
       git -C "$worktree" commit -m "[task:$short_id] Include uncommitted changes from task execution" 2>/dev/null || true
     fi
@@ -460,21 +462,18 @@ AGENT_ID=$AGENT_ID"
   # --- Merge task branch into main and push ---
   if ! merge_and_push "$worktree" "$short_id" "$branch" "$model"; then
     warn "Failed to merge and push task branch. Preserving work."
-    # Make sure main is in a clean state — merge_and_push already resets,
-    # but do it again defensively in case it exited early.
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-    # Push the task branch so work isn't lost
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge/push to main failed"
     return 1
   fi
 
-  # --- Mark task done (only after successful merge to main) ---
+  # --- Mark task done ---
   if [ -z "$result_text" ]; then
     result_text="Implemented by $AGENT_ID. $commit_count commit(s) merged to main."
   fi
@@ -483,7 +482,6 @@ AGENT_ID=$AGENT_ID"
 
   # --- Cleanup ---
   cleanup_worktree "$short_id"
-  # Clean up remote task branch now that it's merged
   git -C "$CODE_REPO" push origin --delete "$branch" 2>/dev/null || true
 
   return 0
@@ -492,12 +490,13 @@ AGENT_ID=$AGENT_ID"
 # --- Resume mode ---
 if [[ -n "$RESUME_TASK_ID" ]]; then
   log "Resuming task $RESUME_TASK_ID..."
-  task_json=$(python3 -c "
+  task_json=$(tl0 show "$RESUME_TASK_ID" 2>/dev/null | python3 -c "
 import json, sys
-sys.path.insert(0, '$TOOLS')
-from common import load_task
-t = load_task('$RESUME_TASK_ID')
-print(json.dumps([t]))
+t = json.load(sys.stdin)
+if isinstance(t, list):
+    print(json.dumps(t))
+else:
+    print(json.dumps([t]))
 " 2>/dev/null)
 
   if [ -z "$task_json" ] || [ "$task_json" = "null" ] || [ "$task_json" = "[]" ]; then
@@ -519,6 +518,7 @@ tasks_completed=0
 log "Task loop starting (agent=$AGENT_ID)"
 log "  Code repo: $CODE_REPO"
 log "  Worktrees: $WORKTREE_BASE"
+log "  Prompt:    $TASK_PROMPT"
 log "  Filters: model=${MODEL_FILTER:-any} tag=${TAG_FILTER:-any}"
 [[ "$MAX_TASKS" -gt 0 ]] && log "  Max tasks: $MAX_TASKS"
 log ""

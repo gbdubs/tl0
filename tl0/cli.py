@@ -110,6 +110,9 @@ def main():
     # reset-for-execution
     sub.add_parser("reset-for-execution", help="Reset planning tasks for execution mode")
 
+    # loop
+    sub.add_parser("loop", help="Run task execution loop (claim, implement, merge)")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
 
@@ -166,7 +169,7 @@ def main():
 
     elif cmd in ("viewer",):
         from tl0.commands.viewer import main as cmd_main
-        cmd_main()
+        cmd_main(remaining)
 
     elif cmd in ("catalog",):
         from tl0.analysis.build_catalog import main as cmd_main
@@ -179,6 +182,14 @@ def main():
     elif cmd in ("reset-for-execution",):
         from tl0.analysis.reset_for_execution import main as cmd_main
         cmd_main(remaining)
+
+    elif cmd in ("loop",):
+        # Delegate to bash script — it manages worktrees, git, and claude
+        loop_script = Path(__file__).parent / "loop" / "task_loop.sh"
+        if not loop_script.exists():
+            print(f"Error: task loop script not found at {loop_script}", file=sys.stderr)
+            sys.exit(1)
+        os.execvp("bash", ["bash", str(loop_script)] + remaining)
 
     else:
         parser.print_help()

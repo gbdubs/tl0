@@ -1168,13 +1168,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description='Open the task viewer in your browser')
     parser.add_argument('--port', type=int, default=7474,
                         help='Local port to serve on (default: 7474)')
     parser.add_argument('--no-open', action='store_true',
                         help="Don't auto-open the browser")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     server = HTTPServer(('127.0.0.1', args.port), Handler)
     url    = f'http://localhost:{args.port}'
