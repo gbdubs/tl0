@@ -330,6 +330,49 @@ mark {
 }
 .t-title mark { font-weight: 600; }
 
+/* ── Chart view ──────────────────────────────────────────── */
+#chart-container {
+  display: none; flex: 1; flex-direction: column;
+  padding: 24px 28px; overflow: hidden;
+}
+#chart-container.visible { display: flex; }
+#chart-svg-wrap {
+  flex: 1; position: relative; min-height: 0;
+}
+#chart-svg-wrap svg { width: 100%; height: 100%; }
+#chart-legend {
+  display: flex; gap: 16px; justify-content: center;
+  padding: 12px 0 4px; flex-shrink: 0;
+}
+.legend-item {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--text);
+}
+.legend-swatch {
+  width: 14px; height: 14px; border-radius: 3px;
+}
+#chart-tooltip {
+  display: none; position: fixed;
+  background: #1f2937; color: #f9fafb; font-size: 12px;
+  padding: 8px 12px; border-radius: 6px;
+  pointer-events: none; z-index: 100;
+  line-height: 1.6; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,.25);
+}
+#chart-tooltip .tt-time {
+  font-weight: 600; margin-bottom: 4px; font-size: 11px;
+  color: #9ca3af; border-bottom: 1px solid #374151; padding-bottom: 4px;
+}
+#chart-tooltip .tt-row {
+  display: flex; align-items: center; gap: 6px;
+}
+#chart-tooltip .tt-swatch {
+  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+}
+.gap-indicator {
+  stroke: #d1d5db; stroke-width: 1; stroke-dasharray: 3,3;
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -375,6 +418,7 @@ mark {
       <span id="result-count"></span>
       <button class="view-btn active" data-view="tree" onclick="setView('tree')">Tree</button>
       <button class="view-btn" data-view="list" onclick="setView('list')">List</button>
+      <button class="view-btn" data-view="chart" onclick="setView('chart')">Chart</button>
     </div>
 
     <div id="task-list-container">
@@ -389,7 +433,13 @@ mark {
     </div>
     <div id="task-detail" style="display:none"></div>
   </main>
+
+  <div id="chart-container">
+    <div id="chart-svg-wrap"></div>
+    <div id="chart-legend"></div>
+  </div>
 </div>
+<div id="chart-tooltip"></div>
 
 <script>
 // ── State ────────────────────────────────────────────────────
@@ -486,7 +536,8 @@ async function loadTasks() {
     taskMap   = Object.fromEntries(allTasks.map(t => [t.id, t]));
     updateStats();
     renderTagFilters();
-    renderTaskList();
+    if (state.view === 'chart') renderChart();
+    else renderTaskList();
     if (_initialLoad) {
       _initialLoad = false;
       // URL hash takes priority over localStorage on first load
@@ -603,10 +654,16 @@ function setView(v) {
   state.view = v;
   persist();
   document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
-  renderTaskList();
+  const isChart = v === 'chart';
+  document.getElementById('task-list-container').style.display = isChart ? 'none' : '';
+  document.getElementById('detail').style.display = isChart ? 'none' : '';
+  document.getElementById('chart-container').classList.toggle('visible', isChart);
+  if (isChart) renderChart();
+  else renderTaskList();
 }
 
 function renderTaskList() {
+  if (state.view === 'chart') { renderChart(); return; }
   const filtered   = getFiltered();
   const container  = document.getElementById('task-list');
   container.innerHTML = '';
@@ -1059,6 +1116,235 @@ function agoStr(iso) {
   } catch (_) { return ''; }
 }
 
+// ── Chart ────────────────────────────────────────────────────
+const STATUS_COLORS = {
+  done:          '#86efac',
+  'in-progress': '#22c55e',
+  claimed:       '#3b82f6',
+  pending:       '#fb923c',
+  stuck:         '#f87171',
+};
+const STATUS_ORDER = ['done', 'in-progress', 'claimed', 'pending', 'stuck'];
+
+function inferStatusAt(task, t) {
+  if (t < new Date(task.created_at).getTime()) return null;
+  if (task.completed_at && t >= new Date(task.completed_at).getTime()) return 'done';
+  if (task.claimed_at && t >= new Date(task.claimed_at).getTime()) {
+    // Use current status for claimed/in-progress/stuck distinction
+    if (task.status === 'stuck') return 'stuck';
+    if (task.status === 'in-progress' || task.status === 'done') return 'in-progress';
+    return 'claimed';
+  }
+  return 'pending';
+}
+
+function buildTimeline(tasks) {
+  // Collect all event timestamps
+  const times = new Set();
+  tasks.forEach(t => {
+    if (t.created_at)   times.add(new Date(t.created_at).getTime());
+    if (t.claimed_at)   times.add(new Date(t.claimed_at).getTime());
+    if (t.completed_at) times.add(new Date(t.completed_at).getTime());
+  });
+  const sorted = [...times].filter(t => !isNaN(t)).sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+
+  return sorted.map(t => {
+    const counts = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
+    tasks.forEach(task => {
+      const s = inferStatusAt(task, t);
+      if (s) counts[s]++;
+    });
+    return { time: t, ...counts };
+  });
+}
+
+function collapseGaps(timeline) {
+  if (timeline.length < 2) return timeline.map((p, i) => ({ ...p, x: i }));
+
+  // Compute intervals
+  const intervals = [];
+  for (let i = 1; i < timeline.length; i++) {
+    intervals.push(timeline[i].time - timeline[i - 1].time);
+  }
+  // Median interval
+  const sortedIntervals = [...intervals].sort((a, b) => a - b);
+  const median = sortedIntervals[Math.floor(sortedIntervals.length / 2)];
+  const threshold = median * 3;
+
+  // Build collapsed x coordinates
+  const result = [{ ...timeline[0], x: 0, gap: false }];
+  let x = 0;
+  const gapUnit = median || 1; // unit size for collapsed gaps
+  for (let i = 1; i < timeline.length; i++) {
+    const dt = timeline[i].time - timeline[i - 1].time;
+    const isGap = dt > threshold && threshold > 0;
+    if (isGap) {
+      x += gapUnit; // compressed gap
+    } else {
+      x += dt;
+    }
+    result.push({ ...timeline[i], x, gap: isGap });
+  }
+  return result;
+}
+
+function renderChart() {
+  const filtered = getFiltered();
+  const timeline = buildTimeline(filtered);
+  const collapsed = collapseGaps(timeline);
+
+  const wrap = document.getElementById('chart-svg-wrap');
+  const legendEl = document.getElementById('chart-legend');
+
+  if (collapsed.length < 2) {
+    wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted)">Not enough data points to render chart.</div>';
+    legendEl.innerHTML = '';
+    return;
+  }
+
+  const rect = wrap.getBoundingClientRect();
+  const W = rect.width || 800;
+  const H = rect.height || 400;
+  const pad = { top: 20, right: 20, bottom: 50, left: 45 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  const xMin = collapsed[0].x;
+  const xMax = collapsed[collapsed.length - 1].x;
+  const xRange = xMax - xMin || 1;
+
+  // Max total tasks at any point
+  const maxTotal = Math.max(...collapsed.map(p =>
+    STATUS_ORDER.reduce((sum, s) => sum + p[s], 0)
+  ));
+  const yMax = maxTotal || 1;
+
+  function sx(x) { return pad.left + ((x - xMin) / xRange) * cw; }
+  function sy(y) { return pad.top + ch - (y / yMax) * ch; }
+
+  // Build stacked areas (bottom to top, order: done, in-progress, claimed, pending, stuck)
+  const areas = {};
+  STATUS_ORDER.forEach((status, si) => {
+    let points = '';
+    // Forward pass (top edge)
+    collapsed.forEach((p, i) => {
+      let yBottom = 0;
+      for (let j = 0; j < si; j++) yBottom += p[STATUS_ORDER[j]];
+      const yTop = yBottom + p[status];
+      points += `${sx(p.x)},${sy(yTop)} `;
+    });
+    // Reverse pass (bottom edge)
+    for (let i = collapsed.length - 1; i >= 0; i--) {
+      const p = collapsed[i];
+      let yBottom = 0;
+      for (let j = 0; j < si; j++) yBottom += p[STATUS_ORDER[j]];
+      points += `${sx(p.x)},${sy(yBottom)} `;
+    }
+    areas[status] = points.trim();
+  });
+
+  // Gap indicators
+  let gapLines = '';
+  collapsed.forEach(p => {
+    if (p.gap) {
+      const gx = sx(p.x);
+      gapLines += `<line class="gap-indicator" x1="${gx}" y1="${pad.top}" x2="${gx}" y2="${pad.top + ch}"/>`;
+    }
+  });
+
+  // Y-axis ticks
+  const yTickCount = Math.min(yMax, 8);
+  const yStep = Math.ceil(yMax / yTickCount);
+  let yAxisSvg = '';
+  for (let v = 0; v <= yMax; v += yStep) {
+    const y = sy(v);
+    yAxisSvg += `<line x1="${pad.left}" y1="${y}" x2="${pad.left + cw}" y2="${y}" stroke="#e5e7eb" stroke-width="0.5"/>`;
+    yAxisSvg += `<text x="${pad.left - 8}" y="${y + 4}" text-anchor="end" fill="#9ca3af" font-size="10">${v}</text>`;
+  }
+
+  // X-axis time labels (pick ~6 evenly spaced)
+  const labelCount = Math.min(collapsed.length, 8);
+  const labelStep = Math.max(1, Math.floor(collapsed.length / labelCount));
+  let xAxisSvg = '';
+  for (let i = 0; i < collapsed.length; i += labelStep) {
+    const p = collapsed[i];
+    const x = sx(p.x);
+    const d = new Date(p.time);
+    const label = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    xAxisSvg += `<text x="${x}" y="${pad.top + ch + 18}" text-anchor="middle" fill="#9ca3af" font-size="10">${esc(label)}</text>`;
+  }
+
+  // Hover columns (invisible rects for each data point region)
+  let hoverRects = '';
+  collapsed.forEach((p, i) => {
+    const x0 = i === 0 ? pad.left : (sx(collapsed[i-1].x) + sx(p.x)) / 2;
+    const x1 = i === collapsed.length - 1 ? pad.left + cw : (sx(p.x) + sx(collapsed[i+1].x)) / 2;
+    hoverRects += `<rect x="${x0}" y="${pad.top}" width="${x1 - x0}" height="${ch}" fill="transparent" data-idx="${i}" class="hover-col"/>`;
+  });
+
+  // Crosshair line
+  const crosshairId = 'chart-crosshair';
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">`;
+  svg += yAxisSvg;
+  svg += gapLines;
+  STATUS_ORDER.forEach(s => {
+    svg += `<polygon points="${areas[s]}" fill="${STATUS_COLORS[s]}" opacity="0.85"/>`;
+  });
+  svg += xAxisSvg;
+  svg += `<line id="${crosshairId}" x1="0" y1="${pad.top}" x2="0" y2="${pad.top + ch}" stroke="#6b7280" stroke-width="1" opacity="0" pointer-events="none"/>`;
+  svg += hoverRects;
+  svg += `</svg>`;
+  wrap.innerHTML = svg;
+
+  // Tooltip + crosshair interaction
+  const tooltip = document.getElementById('chart-tooltip');
+  const crosshair = document.getElementById(crosshairId);
+  wrap.querySelectorAll('.hover-col').forEach(rect => {
+    rect.addEventListener('mouseenter', e => {
+      const idx = +rect.dataset.idx;
+      const p = collapsed[idx];
+      const d = new Date(p.time);
+      const timeStr = d.toLocaleString();
+      let html = `<div class="tt-time">${esc(timeStr)}</div>`;
+      const total = STATUS_ORDER.reduce((sum, s) => sum + p[s], 0);
+      STATUS_ORDER.forEach(s => {
+        if (p[s] > 0) {
+          html += `<div class="tt-row"><span class="tt-swatch" style="background:${STATUS_COLORS[s]}"></span>${s}: ${p[s]}</div>`;
+        }
+      });
+      html += `<div class="tt-row" style="border-top:1px solid #374151;margin-top:4px;padding-top:4px;font-weight:600">total: ${total}</div>`;
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+      crosshair.setAttribute('x1', sx(p.x));
+      crosshair.setAttribute('x2', sx(p.x));
+      crosshair.setAttribute('opacity', '0.5');
+    });
+    rect.addEventListener('mousemove', e => {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+    });
+    rect.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+      crosshair.setAttribute('opacity', '0');
+    });
+  });
+
+  // Legend
+  legendEl.innerHTML = STATUS_ORDER.map(s =>
+    `<div class="legend-item"><span class="legend-swatch" style="background:${STATUS_COLORS[s]}"></span>${s}</div>`
+  ).join('');
+}
+
+// Re-render chart on window resize
+let _chartResizeTimer;
+window.addEventListener('resize', () => {
+  if (state.view !== 'chart') return;
+  clearTimeout(_chartResizeTimer);
+  _chartResizeTimer = setTimeout(renderChart, 150);
+});
+
 // ── Event wiring ─────────────────────────────────────────────
 document.querySelectorAll('#status-chips .chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -1127,6 +1413,11 @@ if (state.view !== 'tree') {
   document.querySelectorAll('.view-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.view === state.view)
   );
+}
+if (state.view === 'chart') {
+  document.getElementById('task-list-container').style.display = 'none';
+  document.getElementById('detail').style.display = 'none';
+  document.getElementById('chart-container').classList.add('visible');
 }
 
 loadTasks();
