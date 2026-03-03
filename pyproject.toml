@@ -1,0 +1,22 @@
+[project]
+name = "tl0"
+version = "0.1.0"
+description = "Task coordination system for parallel AI agents"
+requires-python = ">=3.10"
+license = "MIT"
+
+[project.scripts]
+tl0 = "tl0.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tl0*"]
+
+[tool.setuptools.package-data]
+tl0 = ["schema.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

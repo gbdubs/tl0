@@ -1,0 +1,5 @@
+{
+  "project_name": "my-project",
+  "tasks_dir": "~/my-project-tasks",
+  "valid_models": ["opus", "sonnet", "haiku"]
+}

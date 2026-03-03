@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tl0 Task",
+  "description": "A single unit of work in the tl0 task coordination system.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "description",
+    "status",
+    "created_at",
+    "updated_at",
+    "blocked_by",
+    "tags"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier. Also the filename (without .json)."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Concise, action-oriented title."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Detailed description sufficient for an agent to execute without ambiguity."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "claimed", "in-progress", "done", "stuck"],
+      "description": "Current lifecycle state."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of task creation."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of last modification."
+    },
+    "claimed_by": {
+      "type": ["string", "null"],
+      "description": "Agent identifier that claimed this task."
+    },
+    "claimed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When the task was claimed."
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When the task was completed."
+    },
+    "blocked_by": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Task IDs that must be done before this task is claimable."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Freeform labels. Convention: 'category:value'."
+    },
+    "model": {
+      "type": ["string", "null"],
+      "description": "Which AI model is needed for this task."
+    },
+    "thinking": {
+      "type": ["boolean", "null"],
+      "description": "Whether extended thinking mode is needed."
+    },
+    "design_references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" },
+          "section": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      },
+      "description": "Design documents relevant to this task."
+    },
+    "produces": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "File paths this task creates or modifies."
+    },
+    "context_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "File paths the agent should read before starting."
+    },
+    "result": {
+      "type": ["string", "null"],
+      "description": "Summary of what happened when completed."
+    },
+    "tasks_created": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "IDs of child tasks this task produced."
+    },
+    "parent_task": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "ID of the task that spawned this one."
+    }
+  },
+  "additionalProperties": false
+}
