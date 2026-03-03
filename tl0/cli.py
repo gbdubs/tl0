@@ -84,6 +84,9 @@ def main():
     sub.add_parser("free", help="Release a task back to pending")
     sub.add_parser("release", help="Alias for free")
 
+    # free-all
+    sub.add_parser("free-all", help="Free all claimed/in-progress/stuck tasks back to pending")
+
     # update
     sub.add_parser("update", help="Update task fields")
 
@@ -149,6 +152,10 @@ def main():
 
     elif cmd in ("free", "release"):
         from tl0.commands.free import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("free-all",):
+        from tl0.commands.free_all import main as cmd_main
         cmd_main(remaining)
 
     elif cmd in ("update",):
