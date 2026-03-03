@@ -393,10 +393,11 @@ TASK_ID=$task_id
 AGENT_ID=$AGENT_ID"
 
     local claude_exit=0
-    (cd "$worktree" && claude -p \
+    local claude_stdout=""
+    claude_stdout=$(cd "$worktree" && claude -p \
       --model "$model" \
       --dangerously-skip-permissions \
-      "$prompt"
+      "$prompt" 2>&1
     ) || claude_exit=$?
 
     if [ $claude_exit -ne 0 ]; then
@@ -408,6 +409,16 @@ AGENT_ID=$AGENT_ID"
   local result_text=""
   if [ -f "$worktree/.task-result.txt" ]; then
     result_text=$(cat "$worktree/.task-result.txt")
+  fi
+
+  # --- Fallback: extract result from Claude's stdout ---
+  if [ -z "$result_text" ] && [ -n "$claude_stdout" ]; then
+    local fallback
+    fallback=$(printf '%s' "$claude_stdout" | tail -c 500)
+    if [ -n "$fallback" ]; then
+      result_text="[fallback-from-stdout] $fallback"
+      log "    No .task-result.txt found; using Claude stdout as fallback result."
+    fi
   fi
 
   # --- Check if claude committed anything ---

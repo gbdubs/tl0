@@ -65,11 +65,15 @@ git commit -m "[task:${TASK_ID:0:8}] <concise summary>"
 
 ## Step 8: Write a result summary
 
-When finished, write a result summary to `.task-result.txt` in the repo root. The outer loop reads this file and uses it to mark the task done.
+**CRITICAL: You MUST actually execute a shell command to write this file. Do not just describe or narrate writing it — run the command.**
+
+When finished, write a result summary to `.task-result.txt` in the repo root by executing this shell command:
 
 ```bash
 echo "Built <what>. Files: <list>. Key decisions: <any>. Notes for downstream: <any>." > .task-result.txt
 ```
+
+The outer loop reads this file to determine success. If the file does not exist on disk, the task will be marked as failed regardless of what you output as text.
 
 Do NOT call `tl0 done` yourself. The outer loop handles that.
 Do NOT commit `.task-result.txt`.
