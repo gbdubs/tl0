@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from tl0.common import load_task, load_all_tasks, save_task, task_status_map, now_iso, git_commit
+from tl0.common import load_task, load_all_tasks, save_task, task_status_map, task_status, now_iso, git_commit
 
 
 def main(argv: list[str] | None = None):
@@ -16,12 +16,9 @@ def main(argv: list[str] | None = None):
     task = load_task(args.task_id)
 
     # Validate claimable
-    if task["status"] != "pending":
-        print(f"Error: task status is '{task['status']}', must be 'pending'", file=sys.stderr)
-        sys.exit(1)
-
-    if task["claimed_by"] is not None:
-        print(f"Error: task already claimed by '{task['claimed_by']}'", file=sys.stderr)
+    status = task_status(task)
+    if status != "pending":
+        print(f"Error: task status is '{status}', must be 'pending'", file=sys.stderr)
         sys.exit(1)
 
     # Check blockers
@@ -32,12 +29,8 @@ def main(argv: list[str] | None = None):
             print(f"Error: blocker {bid} is not done (status: {status_map.get(bid, 'missing')})", file=sys.stderr)
             sys.exit(1)
 
-    # Claim it
-    now = now_iso()
-    task["status"] = "claimed"
-    task["claimed_by"] = args.agent_id
-    task["claimed_at"] = now
-    task["updated_at"] = now
+    # Append claimed event
+    task["events"].append({"type": "claimed", "at": now_iso(), "by": args.agent_id})
 
     save_task(task)
     git_commit(f"claim: {task['title']} by {args.agent_id}")

@@ -13,11 +13,9 @@ def _minimal_task(**overrides):
         "id": "00000000-0000-0000-0000-000000000001",
         "title": "Test task",
         "description": "A test",
-        "status": "pending",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
         "blocked_by": [],
         "tags": [],
+        "events": [{"type": "created", "at": now_iso()}],
     }
     task.update(overrides)
     return task
@@ -33,15 +31,9 @@ class TestValidateTaskShape:
         task = _minimal_task(
             model="opus",
             thinking=True,
-            claimed_by=None,
-            claimed_at=None,
-            completed_at=None,
-            design_references=[{"file": "TDD.md", "section": "1"}],
-            produces=["src/foo.ts"],
-            context_files=["src/bar.ts"],
             result=None,
-            tasks_created=[],
-            parent_task=None,
+            task_children=[],
+            task_parent=None,
         )
         errors = validate_task_shape(task)
         assert errors == []
@@ -51,11 +43,6 @@ class TestValidateTaskShape:
         del task["title"]
         errors = validate_task_shape(task)
         assert any("title" in e for e in errors)
-
-    def test_invalid_status(self):
-        task = _minimal_task(status="banana")
-        errors = validate_task_shape(task)
-        assert any("status" in e for e in errors)
 
     def test_unexpected_field(self):
         task = _minimal_task(surprise="hello")
@@ -78,19 +65,24 @@ class TestValidateTaskShape:
         assert any("strings" in e for e in errors)
 
     def test_done_without_result(self):
-        task = _minimal_task(status="done")
+        # A task whose last event is "done" but has no result should fail
+        task = _minimal_task(events=[
+            {"type": "created", "at": now_iso()},
+            {"type": "claimed", "at": now_iso(), "by": "agent-1"},
+            {"type": "done", "at": now_iso(), "by": "agent-1"},
+        ])
         errors = validate_task_shape(task)
         assert any("result" in e for e in errors)
 
-    def test_claimed_without_claimed_by(self):
-        task = _minimal_task(status="claimed")
+    def test_invalid_event_type(self):
+        task = _minimal_task(events=[{"type": "banana", "at": now_iso()}])
         errors = validate_task_shape(task)
-        assert any("claimed_by" in e for e in errors)
+        assert any("banana" in e for e in errors)
 
-    def test_design_references_validation(self):
-        task = _minimal_task(design_references=[{"no_file": True}])
+    def test_event_missing_at(self):
+        task = _minimal_task(events=[{"type": "claimed", "by": "agent-1"}])
         errors = validate_task_shape(task)
-        assert any("file" in e for e in errors)
+        assert any("at" in e for e in errors)
 
     def test_model_is_optional(self):
         task = _minimal_task()

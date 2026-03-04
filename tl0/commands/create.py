@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import uuid
 
 from tl0.common import VALID_MODELS, load_task, save_task, now_iso, git_commit
@@ -14,7 +15,7 @@ def parse_refs(refs_str: str) -> list[dict]:
     result = []
     for ref in refs_str.split(","):
         parts = ref.strip().split(":", 2)
-        entry = {"file": parts[0]}
+        entry: dict = {"file": parts[0]}
         if len(parts) > 1 and parts[1]:
             entry["section"] = parts[1]
         if len(parts) > 2 and parts[2]:
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--design-refs", default="", help="Comma-separated file:section:note")
     parser.add_argument("--produces", default="", help="Comma-separated file paths")
     parser.add_argument("--context-files", default="", help="Comma-separated file paths")
-    parser.add_argument("--parent", default=None, help="Parent task UUID (prefix OK)")
+    parser.add_argument("--parent", default=None, help="Parent task UUID (prefix OK). Also auto-detected from TL0_TASK_ID env var.")
 
     args = parser.parse_args(argv)
 
@@ -43,25 +44,21 @@ def main(argv: list[str] | None = None):
     if args.model and VALID_MODELS and args.model not in VALID_MODELS:
         parser.error(f"model must be one of {sorted(VALID_MODELS)}, got '{args.model}'")
 
-    # Resolve parent prefix to full UUID
+    # Resolve parent: explicit flag > TL0_TASK_ID env var > None
     parent_id = None
     if args.parent:
         parent = load_task(args.parent)
         parent_id = parent["id"]
+    elif os.environ.get("TL0_TASK_ID"):
+        parent_id = os.environ["TL0_TASK_ID"]
 
     task_id = str(uuid.uuid4())
-    now = now_iso()
 
     task = {
         "id": task_id,
         "title": args.title,
         "description": args.description,
-        "status": "pending",
-        "created_at": now,
-        "updated_at": now,
-        "claimed_by": None,
-        "claimed_at": None,
-        "completed_at": None,
+        "events": [{"type": "created", "at": now_iso()}],
         "blocked_by": [x.strip() for x in args.blocked_by.split(",") if x.strip()],
         "tags": [x.strip() for x in args.tags.split(",") if x.strip()],
         "model": args.model,
@@ -70,18 +67,17 @@ def main(argv: list[str] | None = None):
         "produces": [x.strip() for x in args.produces.split(",") if x.strip()],
         "context_files": [x.strip() for x in args.context_files.split(",") if x.strip()],
         "result": None,
-        "tasks_created": [],
-        "parent_task": parent_id,
+        "task_children": [],
+        "task_parent": parent_id,
     }
 
     save_task(task)
 
-    # Update parent's tasks_created
+    # Update parent's task_children
     if parent_id:
         parent = load_task(parent_id)
-        if task_id not in parent.get("tasks_created", []):
-            parent.setdefault("tasks_created", []).append(task_id)
-            parent["updated_at"] = now
+        if task_id not in parent.get("task_children", []):
+            parent.setdefault("task_children", []).append(task_id)
             save_task(parent)
 
     git_commit(f"create: {args.title}")

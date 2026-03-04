@@ -4,13 +4,12 @@ import argparse
 import json
 import sys
 
-from tl0.common import load_task, load_all_tasks, save_task, now_iso, git_commit, VALID_STATUSES, VALID_MODELS
+from tl0.common import load_task, load_all_tasks, save_task, git_commit, task_status, VALID_MODELS
 
 
 def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Update a task's fields")
     parser.add_argument("task_id", help="Task UUID (prefix match OK)")
-    parser.add_argument("--status", choices=sorted(VALID_STATUSES))
     parser.add_argument("--title", help="New title")
     parser.add_argument("--description", help="New description")
     parser.add_argument("--model", default=None, help="New model")
@@ -19,7 +18,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--remove-tags", default="", help="Comma-separated tags to remove")
     parser.add_argument("--add-blocked-by", default="", help="Comma-separated task UUIDs to add as blockers")
     parser.add_argument("--remove-blocked-by", default="", help="Comma-separated task UUIDs to remove as blockers")
-    parser.add_argument("--result", help="Set result text")
+    parser.add_argument("--result", help="Set result text (use 'done' command for lifecycle transitions)")
     args = parser.parse_args(argv)
 
     # Resolve prefix
@@ -35,9 +34,6 @@ def main(argv: list[str] | None = None):
 
     changed = False
 
-    if args.status and args.status != task["status"]:
-        task["status"] = args.status
-        changed = True
     if args.title and args.title != task["title"]:
         task["title"] = args.title
         changed = True
@@ -86,7 +82,6 @@ def main(argv: list[str] | None = None):
         print("No changes made.")
         return
 
-    task["updated_at"] = now_iso()
     save_task(task)
     git_commit(f"update: {task['title']}")
-    print(json.dumps({"id": task["id"], "title": task["title"], "status": task["status"]}, indent=2))
+    print(json.dumps({"id": task["id"], "title": task["title"], "status": task_status(task)}, indent=2))

@@ -6,7 +6,8 @@ requires-python = ">=3.10"
 license = "MIT"
 
 [project.scripts]
-tl0 = "tl0.cli:main"
+tl0h = "tl0.cli_human:main"
+tl0m = "tl0.cli_machine:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

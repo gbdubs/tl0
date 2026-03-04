@@ -38,24 +38,7 @@ def build_catalog(tasks_list):
     lines.append(f"Generated from {len(tasks)} total tasks, {len(leaf_tasks)} leaf tasks.")
     lines.append("")
 
-    # Section 1: produces index
-    lines.append("## Produces Index")
-    lines.append("")
-    lines.append("Maps output file paths to the task that creates them.")
-    lines.append("")
-    produces_map = defaultdict(list)
-    for tid, t in sorted(leaf_tasks.items(), key=lambda x: x[1]["title"]):
-        for p in t.get("produces", []):
-            produces_map[p].append(tid)
-
-    for path in sorted(produces_map.keys()):
-        tids = produces_map[path]
-        for tid in tids:
-            t = leaf_tasks[tid]
-            lines.append(f"- `{path}` <- {tid[:8]} \"{t['title'][:80]}\" [phase:{get_phase(t)}]")
-    lines.append("")
-
-    # Section 2: tasks by phase + area
+    # Section 1: tasks by phase + area
     lines.append("## Tasks by Phase")
     lines.append("")
 
@@ -79,33 +62,11 @@ def build_catalog(tasks_list):
             areas = ", ".join(get_areas(t))
             blockers = ", ".join(b[:8] for b in t.get("blocked_by", []))
             blocker_str = f" blocked_by=[{blockers}]" if blockers else ""
-            produces = ", ".join(t.get("produces", [])[:3])
-            produces_str = f" produces=[{produces}]" if produces else ""
             lines.append(
                 f"- {t['id'][:8]} \"{t['title'][:100]}\" "
-                f"[{areas}]{blocker_str}{produces_str}"
+                f"[{areas}]{blocker_str}"
             )
         lines.append("")
-
-    # Section 3: Design reference index
-    lines.append("## Design Reference Index")
-    lines.append("")
-    lines.append("Which tasks reference which design sections.")
-    lines.append("")
-    ref_map = defaultdict(list)
-    for tid, t in leaf_tasks.items():
-        for ref in t.get("design_references", []):
-            key = ref.get("file", "?")
-            section = ref.get("section", "")
-            if section:
-                key = f"{key} > {section}"
-            ref_map[key].append(tid)
-
-    for key in sorted(ref_map.keys()):
-        tids = ref_map[key]
-        tid_strs = ", ".join(t[:8] for t in tids)
-        lines.append(f"- {key}: {tid_strs}")
-    lines.append("")
 
     return "\n".join(lines)
 

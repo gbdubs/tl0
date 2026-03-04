@@ -35,6 +35,8 @@ set -euo pipefail
 EXPECTED_EXIT=false
 alert_on_exit() {
   local exit_code=$?
+  # Clean up supervisor status file if running under supervisor
+  [[ -n "${TL0_LOOP_STATUS_FILE:-}" ]] && rm -f "$TL0_LOOP_STATUS_FILE" 2>/dev/null || true
   if ! $EXPECTED_EXIT; then
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -69,6 +71,16 @@ CODE_REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 WORKTREE_BASE="$CODE_REPO/.task-worktrees"
 AGENT_ID="task-loop-$$"
+
+# Resolve the transcripts directory from tl0's tasks dir
+TRANSCRIPTS_DIR=$(python3 -c "
+from tl0.common import TRANSCRIPTS_FOLDER
+print(TRANSCRIPTS_FOLDER)
+" 2>/dev/null) || {
+  echo "Error: could not resolve transcripts directory." >&2
+  EXPECTED_EXIT=true; exit 1
+}
+mkdir -p "$TRANSCRIPTS_DIR"
 
 # Resolve the execution prompt. Priority:
 # 1. --prompt CLI arg (set below during arg parsing)
@@ -148,8 +160,72 @@ done
 
 resolve_prompt
 
-log()  { echo "[$(date +%H:%M:%S)] $*"; }
-warn() { echo "[$(date +%H:%M:%S)] WARN: $*" >&2; }
+# Per-task transcript state (set inside run_task, cleared after)
+TASK_TRANSCRIPT_DIR=""
+TASK_SESSION_ID=""
+CLAUDE_CALL_SEQ=0
+
+log() {
+  local msg="[$(date +%H:%M:%S)] $*"
+  echo "$msg"
+  [[ -n "$TASK_TRANSCRIPT_DIR" ]] && [[ -d "$TASK_TRANSCRIPT_DIR" ]] && echo "$msg" >> "$TASK_TRANSCRIPT_DIR/loop.log" || true
+}
+warn() {
+  local msg="[$(date +%H:%M:%S)] WARN: $*"
+  echo "$msg" >&2
+  [[ -n "$TASK_TRANSCRIPT_DIR" ]] && [[ -d "$TASK_TRANSCRIPT_DIR" ]] && echo "$msg" >> "$TASK_TRANSCRIPT_DIR/loop.log" || true
+}
+
+# Write status to supervisor status file (if running under supervisor).
+# No-op when TL0_LOOP_STATUS_FILE is not set.
+write_status() {
+  local phase="$1" task_id="${2:-}" task_title="${3:-}"
+  [[ -z "${TL0_LOOP_STATUS_FILE:-}" ]] && return 0
+  printf '{"phase":"%s","task_id":"%s","task_title":"%s","timestamp":%d}\n' \
+    "$phase" "$task_id" "$task_title" "$(date +%s)" \
+    > "$TL0_LOOP_STATUS_FILE" 2>/dev/null || true
+}
+
+# Run claude with transcript capture. Usage:
+#   run_claude <label> <worktree> <model> <prompt> [resume_session_id]
+# If resume_session_id is provided, passes --resume to continue that session.
+# Sets CLAUDE_OUTPUT and returns claude's exit code.
+run_claude() {
+  local label="$1"
+  local worktree="$2"
+  local model="$3"
+  local prompt="$4"
+  local resume_session_id="${5:-}"
+
+  CLAUDE_CALL_SEQ=$((CLAUDE_CALL_SEQ + 1))
+  local seq
+  seq=$(printf "%02d" "$CLAUDE_CALL_SEQ")
+  local transcript_file="$TASK_TRANSCRIPT_DIR/${seq}-${label}.jsonl"
+
+  if [[ -n "$resume_session_id" ]]; then
+    log "    Running claude [$seq-$label] (resuming session $resume_session_id)..."
+  else
+    log "    Running claude [$seq-$label]..."
+  fi
+
+  local claude_exit=0
+  CLAUDE_OUTPUT=""
+  CLAUDE_OUTPUT=$(cd "$worktree" && claude -p \
+    --model "$model" \
+    --dangerously-skip-permissions \
+    --output-format stream-json \
+    ${resume_session_id:+--resume "$resume_session_id"} \
+    "$prompt" 2>&1 \
+    | tee "$transcript_file"
+  ) || claude_exit=$?
+
+  if [ $claude_exit -ne 0 ]; then
+    warn "Claude [$seq-$label] exited with code $claude_exit."
+  fi
+
+  log "    Transcript [$seq-$label] saved ($(wc -l < "$transcript_file" | tr -d ' ') events)"
+  return $claude_exit
+}
 
 mkdir -p "$WORKTREE_BASE"
 
@@ -208,14 +284,14 @@ print_resume_instructions() {
   echo "  Branch: $branch"
   echo ""
   echo "  To resume (merge only, skip claude):"
-  echo "    tl0 loop --resume $task_id"
+  echo "    tl0h resume $task_id"
   echo ""
   echo "  To resume with claude re-run:"
   echo "    git worktree add $WORKTREE_BASE/$short_id $branch"
   echo "    cd $WORKTREE_BASE/$short_id && claude -p ..."
   echo ""
   echo "  To abandon:"
-  echo "    tl0 free $task_id"
+  echo "    tl0m free $task_id"
   echo "    git branch -D $branch"
   echo "    git push origin --delete $branch 2>/dev/null"
   echo "========================================================"
@@ -234,11 +310,10 @@ merge_main_into_branch() {
 
   log "    Merge conflict detected. Asking claude to resolve..."
   local resolve_exit=0
-  (cd "$worktree" && claude -p \
-    --model "$model" \
-    --dangerously-skip-permissions \
-    "There are merge conflicts after merging main into this task branch. Resolve all conflicts, then commit. Run 'git diff --name-only --diff-filter=U' to see conflicted files. For each one, read it, resolve the conflict markers, and 'git add' it. Then 'git commit --no-edit'."
-  ) || resolve_exit=$?
+  run_claude "merge-conflict" "$worktree" "$model" \
+    "There are merge conflicts after merging main into this task branch. Resolve all conflicts, then commit. Run 'git diff --name-only --diff-filter=U' to see conflicted files. For each one, read it, resolve the conflict markers, and 'git add' it. Then 'git commit --no-edit'." \
+    "$TASK_SESSION_ID" \
+    || resolve_exit=$?
 
   local unmerged
   unmerged=$(git -C "$worktree" diff --name-only --diff-filter=U 2>/dev/null | wc -l | tr -d ' ')
@@ -256,12 +331,13 @@ merge_and_push() {
   local short_id="$2"
   local branch="$3"
   local model="$4"
+  local commit_msg="$5"
 
   local max_attempts=20
   local pushed=false
 
   for attempt in $(seq 1 $max_attempts); do
-    log "    Merge+push attempt $attempt/$max_attempts..."
+    log "    Squash+push attempt $attempt/$max_attempts..."
 
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
@@ -270,7 +346,8 @@ merge_and_push() {
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-    if git -C "$CODE_REPO" merge --ff-only "$branch" 2>/dev/null; then
+    if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
       if git -C "$CODE_REPO" push origin main 2>/dev/null; then
         pushed=true
         break
@@ -282,7 +359,8 @@ merge_and_push() {
       continue
     fi
 
-    log "    Fast-forward not possible. Merging latest main into task branch..."
+    log "    Squash had conflicts. Merging latest main into task branch..."
+    git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
@@ -294,15 +372,18 @@ merge_and_push() {
 
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
+    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-    if ! git -C "$CODE_REPO" merge --ff-only "$branch" 2>/dev/null; then
-      log "    FF still failed after re-merging. Retrying in ~3s..."
+    if ! git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      log "    Squash still conflicted after re-merging. Retrying in ~3s..."
+      git -C "$CODE_REPO" merge --abort 2>/dev/null || true
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
       sleep $((2 + RANDOM % 4))
       continue
     fi
 
+    git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
     if git -C "$CODE_REPO" push origin main 2>/dev/null; then
       pushed=true
       break
@@ -328,30 +409,47 @@ merge_and_push() {
 run_task() {
   local task_json="$1"
   local skip_claude="${2:-false}"
-  local task_id model thinking title short_id branch worktree
+  local task_id model thinking title description short_id branch worktree task_start_time
 
-  task_id=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-  model=$(echo "$task_json"   | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('model', 'sonnet'))")
-  thinking=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking', False))")
-  title=$(echo "$task_json"   | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['title'][:60])")
+  task_id=$(echo "$task_json"     | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
+  model=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('model', 'sonnet'))")
+  thinking=$(echo "$task_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking', False))")
+  title=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['title'][:60])")
+  description=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('description', ''))")
+  task_start_time=$(date +%s)
   short_id="${task_id:0:8}"
   branch="task/$short_id"
   worktree="$WORKTREE_BASE/$short_id"
+
+  # --- Set up per-task transcript directory ---
+  TASK_TRANSCRIPT_DIR="$TRANSCRIPTS_DIR/$task_id"
+  CLAUDE_CALL_SEQ=0
+  mkdir -p "$TASK_TRANSCRIPT_DIR"
 
   log "Task: $short_id — $title"
 
   if $DRY_RUN; then
     log "    [DRY RUN] Would claim, create worktree, run claude, merge."
+    TASK_TRANSCRIPT_DIR=""; TASK_SESSION_ID=""
     return 0
   fi
 
+  # Ensure TL0_TASK_ID is unset when this function returns (success or failure)
+  trap 'unset TL0_TASK_ID 2>/dev/null || true' RETURN
+
   # --- Claim (skip if resuming — task is already claimed) ---
   if ! $skip_claude; then
-    if ! tl0 claim "$task_id" "$AGENT_ID" > /dev/null 2>&1; then
+    if ! tl0m claim "$task_id" "$AGENT_ID" > /dev/null 2>&1; then
       warn "Failed to claim $short_id (probably claimed by another agent). Skipping."
+      TASK_TRANSCRIPT_DIR=""; TASK_SESSION_ID=""
       return 0
     fi
   fi
+
+  # Set TL0_TASK_ID immediately after claiming so all subsequent tl0m calls
+  # can use it as the implicit task identifier (no need to pass task_id explicitly).
+  export TL0_TASK_ID="$task_id"
+  write_status "claimed" "$task_id" "$title"
 
   # --- Pull latest main ---
   pull_main
@@ -362,16 +460,19 @@ run_task() {
       if git -C "$CODE_REPO" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
         git -C "$CODE_REPO" worktree add --quiet "$worktree" "$branch" 2>/dev/null || {
           warn "Failed to create worktree from existing branch."
+          TASK_TRANSCRIPT_DIR=""; TASK_SESSION_ID=""
           return 1
         }
       elif git -C "$CODE_REPO" show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
         git -C "$CODE_REPO" fetch origin "$branch" 2>/dev/null || true
         git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" "origin/$branch" 2>/dev/null || {
           warn "Failed to create worktree from origin branch."
+          TASK_TRANSCRIPT_DIR=""
           return 1
         }
       else
         warn "Branch $branch not found locally or on origin. Cannot resume."
+        TASK_TRANSCRIPT_DIR=""
         return 1
       fi
     fi
@@ -381,7 +482,8 @@ run_task() {
 
     if ! git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" main 2>/dev/null; then
       warn "Failed to create worktree. Freeing task."
-      tl0 free "$task_id" 2>/dev/null || true
+      tl0m free 2>/dev/null || true
+      TASK_TRANSCRIPT_DIR=""
       return 1
     fi
 
@@ -389,20 +491,60 @@ run_task() {
     local prompt
     prompt="$(cat "$TASK_PROMPT")
 
-TASK_ID=$task_id
-AGENT_ID=$AGENT_ID"
+TL0_TASK_ID=$task_id
+AGENT_ID=$AGENT_ID
+
+Use 'tl0m' for all task operations (create subtasks, mark done, etc.)."
 
     local claude_exit=0
     local claude_stdout=""
-    claude_stdout=$(cd "$worktree" && claude -p \
-      --model "$model" \
-      --dangerously-skip-permissions \
-      "$prompt" 2>&1
-    ) || claude_exit=$?
 
-    if [ $claude_exit -ne 0 ]; then
-      warn "Claude exited with code $claude_exit for task $short_id."
+    write_status "executing" "$task_id" "$title"
+    run_claude "execute" "$worktree" "$model" "$prompt" || claude_exit=$?
+
+    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
+    local transcript_file="$TASK_TRANSCRIPT_DIR/01-execute.jsonl"
+    TASK_SESSION_ID=$(python3 -c "
+import json, sys
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line: continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    sid = msg.get('sessionId', '')
+    if sid:
+        print(sid)
+        sys.exit(0)
+" 2>/dev/null || true)
+    if [[ -n "$TASK_SESSION_ID" ]]; then
+      log "    Session ID: $TASK_SESSION_ID"
     fi
+
+    # Extract final text result from the stream-json transcript.
+    claude_stdout=$(python3 -c "
+import json, sys
+text_parts = []
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get('type') == 'result':
+        result = msg.get('result', '')
+        if isinstance(result, str):
+            text_parts.append(result)
+        elif isinstance(result, list):
+            for block in result:
+                if isinstance(block, dict) and block.get('type') == 'text':
+                    text_parts.append(block.get('text', ''))
+if text_parts:
+    print(text_parts[-1])
+" 2>/dev/null || true)
   fi
 
   # --- Read result summary ---
@@ -427,14 +569,17 @@ AGENT_ID=$AGENT_ID"
 
   if [ "$commit_count" -eq 0 ]; then
     if [ -n "$result_text" ]; then
-      tl0 done "$task_id" --result "$result_text" 2>/dev/null \
+      tl0m done --result "$result_text" 2>/dev/null \
         || warn "Failed to mark task done. May need manual completion."
       cleanup_worktree "$short_id"
+      log "Task $short_id completed (no commits). Transcripts in $TASK_TRANSCRIPT_DIR/"
+      TASK_TRANSCRIPT_DIR=""
       return 0
     else
       warn "No commits on branch and no result file. Task may have failed."
       git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
       print_resume_instructions "$task_id" "$short_id" "$branch" "Claude produced no commits or result"
+      TASK_TRANSCRIPT_DIR=""
       return 1
     fi
   fi
@@ -447,6 +592,7 @@ AGENT_ID=$AGENT_ID"
   fi
 
   # --- Merge main into the task branch ---
+  write_status "merging" "$task_id" "$title"
   log "    Pulling latest main and merging into task branch..."
   pull_main
 
@@ -454,6 +600,7 @@ AGENT_ID=$AGENT_ID"
     warn "Failed to merge main into task branch. Preserving work."
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge conflict with main"
+    TASK_TRANSCRIPT_DIR=""
     return 1
   fi
 
@@ -470,8 +617,16 @@ AGENT_ID=$AGENT_ID"
     fi
   fi
 
-  # --- Merge task branch into main and push ---
-  if ! merge_and_push "$worktree" "$short_id" "$branch" "$model"; then
+  # --- Build squash commit message ---
+  local elapsed=$(( $(date +%s) - task_start_time ))
+  local duration
+  duration="$(( elapsed / 3600 ))h$(( (elapsed % 3600) / 60 ))m$(( elapsed % 60 ))s"
+  local commit_msg
+  commit_msg="$(printf '%s - %s\n\nTL0 Task ID: %s\n\n%s\n\nExecution Time: %s' \
+    "$short_id" "$title" "$task_id" "$description" "$duration")"
+
+  # --- Squash-merge task branch into main and push ---
+  if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg"; then
     warn "Failed to merge and push task branch. Preserving work."
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
@@ -481,6 +636,7 @@ AGENT_ID=$AGENT_ID"
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge/push to main failed"
+    TASK_TRANSCRIPT_DIR=""
     return 1
   fi
 
@@ -488,20 +644,24 @@ AGENT_ID=$AGENT_ID"
   if [ -z "$result_text" ]; then
     result_text="Implemented by $AGENT_ID. $commit_count commit(s) merged to main."
   fi
-  tl0 done "$task_id" --result "$result_text" 2>/dev/null \
+  tl0m done --result "$result_text" 2>/dev/null \
     || warn "Failed to mark task done. May need manual completion."
 
   # --- Cleanup ---
   cleanup_worktree "$short_id"
   git -C "$CODE_REPO" push origin --delete "$branch" 2>/dev/null || true
 
+  log "Task $short_id completed. Transcripts in $TASK_TRANSCRIPT_DIR/"
+  write_status "idle"
+  TASK_TRANSCRIPT_DIR=""
+  TASK_SESSION_ID=""
   return 0
 }
 
 # --- Resume mode ---
 if [[ -n "$RESUME_TASK_ID" ]]; then
   log "Resuming task $RESUME_TASK_ID..."
-  task_json=$(tl0 show "$RESUME_TASK_ID" 2>/dev/null | python3 -c "
+  task_json=$(tl0m show "$RESUME_TASK_ID" 2>/dev/null | python3 -c "
 import json, sys
 t = json.load(sys.stdin)
 if isinstance(t, list):
@@ -545,7 +705,8 @@ while true; do
   pull_main
 
   # Find next task
-  task_json=$(tl0 find "${FIND_ARGS[@]}" 2>/dev/null)
+  write_status "polling"
+  task_json=$(tl0m find "${FIND_ARGS[@]}" 2>/dev/null)
 
   if [ "$task_json" = "[]" ] || [ -z "$task_json" ]; then
     if $ONCE; then

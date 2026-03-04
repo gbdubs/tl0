@@ -29,31 +29,34 @@ def make_task(tasks_dir):
 
     def _make(title="Test task", description="A test task", status="pending",
               blocked_by=None, tags=None, task_id=None, model=None, thinking=None,
-              claimed_by=None, parent_task=None, result=None, tasks_created=None,
-              **kwargs):
+              claimed_by=None, task_parent=None, result=None, task_children=None,
+              events=None, **kwargs):
         import uuid
         tid = task_id or str(uuid.uuid4())
         now = now_iso()
+
+        # Build events from shorthand args if events not provided explicitly
+        if events is None:
+            events = [{"type": "created", "at": now}]
+            if status == "claimed" and claimed_by:
+                events.append({"type": "claimed", "at": now, "by": claimed_by})
+            elif status == "done":
+                agent = claimed_by or "unknown"
+                events.append({"type": "claimed", "at": now, "by": agent})
+                events.append({"type": "done", "at": now, "by": agent})
+
         task = {
             "id": tid,
             "title": title,
             "description": description,
-            "status": status,
-            "created_at": now,
-            "updated_at": now,
+            "events": events,
             "blocked_by": blocked_by or [],
             "tags": tags or [],
             "model": model,
             "thinking": thinking,
-            "claimed_by": claimed_by,
-            "claimed_at": now if claimed_by else None,
-            "completed_at": None,
-            "design_references": [],
-            "produces": [],
-            "context_files": [],
             "result": result,
-            "tasks_created": tasks_created or [],
-            "parent_task": parent_task,
+            "task_children": task_children or [],
+            "task_parent": task_parent,
         }
         task.update(kwargs)
         path = tasks_dir / f"{tid}.json"
