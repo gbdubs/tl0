@@ -150,7 +150,6 @@ def main(argv: list[str] | None = None):
             if not args.dry_run:
                 graph.setdefault(task_id, []).append(blocker_id)
                 tasks[task_id].setdefault("blocked_by", []).append(blocker_id)
-                tasks[task_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
                 with open(TASKS_FOLDER / f"{task_id}.json", "w") as f:
                     json.dump(tasks[task_id], f, indent=2)
                     f.write("\n")

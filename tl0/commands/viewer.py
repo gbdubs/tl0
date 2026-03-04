@@ -6,7 +6,9 @@ Usage:
 """
 
 import argparse
+import html
 import json
+import socket
 import sys
 import threading
 import webbrowser
@@ -15,7 +17,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-from tl0.common import load_all_tasks
+from tl0.common import load_all_tasks, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at
+from tl0.config import load_config
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Single-page HTML app (embedded so the script is self-contained)
@@ -24,7 +27,8 @@ HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>tl0 Task Viewer</title>
+<title>{{PAGE_TITLE}}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root {
   --bg: #f5f6f8;
@@ -52,7 +56,7 @@ body {
 /* ── Header ────────────────────────────────────────────────── */
 #header {
   height: var(--header-h);
-  background: #111827;
+  background: {{HEADER_BG}};
   color: white;
   display: flex;
   align-items: center;
@@ -417,6 +421,7 @@ mark {
     <div id="view-row">
       <span id="result-count"></span>
       <button class="view-btn active" data-view="tree" onclick="setView('tree')">Tree</button>
+      <button class="view-btn" data-view="source" onclick="setView('source')">Source</button>
       <button class="view-btn" data-view="list" onclick="setView('list')">List</button>
       <button class="view-btn" data-view="chart" onclick="setView('chart')">Chart</button>
     </div>
@@ -675,9 +680,17 @@ function renderTaskList() {
   }
 
   // Use tree only when not actively searching / tag-filtering (so hierarchy is meaningful)
-  const useTree = state.view === 'tree' && !state.search.trim() && state.activeTags.length === 0;
+  const useTree = (state.view === 'tree' || state.view === 'source') && !state.search.trim() && state.activeTags.length === 0;
 
-  if (useTree) {
+  if (useTree && state.view === 'source') {
+    // Source tree: group tasks by what created them (source field)
+    const filteredIds = new Set(filtered.map(t => t.id));
+    const { roots, childrenOf } = buildSourceTree();
+    const filteredRoots = roots
+      .filter(id => filteredIds.has(id))
+      .sort((a, b) => (taskMap[a]?.created_at || '').localeCompare(taskMap[b]?.created_at || ''));
+    filteredRoots.forEach(id => renderSourceTree(taskMap[id], container, 0, filteredIds, childrenOf));
+  } else if (useTree) {
     const filteredIds = new Set(filtered.map(t => t.id));
     // Roots: tasks whose parent is absent or not in filteredIds
     const roots = filtered
@@ -698,6 +711,17 @@ function renderTree(task, container, depth, filteredIds) {
   renderItem(task, container, depth, children.length > 0);
   if (children.length && state.expandedNodes.has(task.id)) {
     children.forEach(c => renderTree(c, container, depth + 1, filteredIds));
+  }
+}
+
+function renderSourceTree(task, container, depth, filteredIds, childrenOf) {
+  if (!task || !filteredIds.has(task.id)) return;
+  const children = (childrenOf[task.id] || [])
+    .filter(id => taskMap[id] && filteredIds.has(id))
+    .sort((a, b) => (taskMap[a]?.created_at || '').localeCompare(taskMap[b]?.created_at || ''));
+  renderItem(task, container, depth, children.length > 0);
+  if (children.length && state.expandedNodes.has(task.id)) {
+    children.forEach(cid => renderSourceTree(taskMap[cid], container, depth + 1, filteredIds, childrenOf));
   }
 }
 
@@ -966,6 +990,47 @@ function renderDetail(id) {
     html += `<div class="d-section"><div class="d-label">Result</div><div class="result-box">${esc(task.result)}</div></div>`;
   }
 
+  // Source chain (progenitor trace)
+  const sourceChain = getSourceChain(task.id);
+  if (sourceChain.length > 0) {
+    html += `<div class="d-section"><div class="d-label">Source Chain</div>`;
+    // Show current task's immediate source
+    const src = task.source;
+    if (src === 'human') {
+      html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">⌨ Created by human input</div>`;
+    } else if (src && taskMap[src]) {
+      html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Created by task execution:</div>`;
+    }
+    // Show the full ancestry chain
+    sourceChain.forEach((entry, i) => {
+      const indent = i * 16;
+      const arrow = i > 0 ? '↳ ' : '';
+      if (entry.type === 'human') {
+        html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0">
+          ${arrow}<span style="color:var(--text-muted)">⌨ human input</span>
+        </div>`;
+      } else if (entry.task) {
+        const t = entry.task;
+        const isCurrent = t.id === task.id;
+        if (isCurrent) {
+          html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0;font-weight:600">
+            ${arrow}<span class="t-dot ${statusClass(t.status)}" style="width:7px;height:7px;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:4px"></span>
+            ${esc(t.title.length > 60 ? t.title.slice(0, 60) + '…' : t.title)}
+            <span style="font-weight:400;color:var(--text-muted);font-family:monospace;font-size:10px">${t.id.slice(0,8)}</span>
+          </div>`;
+        } else {
+          html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0">
+            ${arrow}<span class="task-link" onclick="selectTask('${t.id}')" style="display:inline-flex;margin:0;padding:3px 8px">
+              <span class="t-dot ${statusClass(t.status)}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0"></span>
+              ${esc(t.title.length > 60 ? t.title.slice(0, 60) + '…' : t.title)}
+            </span>
+          </div>`;
+        }
+      }
+    });
+    html += `</div>`;
+  }
+
   // Parent task
   if (task.parent_task) {
     html += `<div class="d-section"><div class="d-label">Parent Task</div>${taskLink(task.parent_task)}</div>`;
@@ -987,32 +1052,6 @@ function renderDetail(id) {
     html += `<div class="d-section"><div class="d-label">Blocked By (${task.blocked_by.length})</div>`;
     task.blocked_by.forEach(id => { html += taskLink(id); });
     html += `</div>`;
-  }
-
-  // Design references
-  if ((task.design_references || []).length) {
-    html += `<div class="d-section"><div class="d-label">Design References</div><ul class="file-list">`;
-    task.design_references.forEach(ref => {
-      html += `<li><strong>${esc(ref.file)}</strong>`;
-      if (ref.section) html += ` § ${esc(ref.section)}`;
-      if (ref.note)    html += ` — ${esc(ref.note)}`;
-      html += `</li>`;
-    });
-    html += `</ul></div>`;
-  }
-
-  // Produces
-  if ((task.produces || []).length) {
-    html += `<div class="d-section"><div class="d-label">Produces</div><ul class="file-list">`;
-    task.produces.forEach(f => { html += `<li>${esc(f)}</li>`; });
-    html += `</ul></div>`;
-  }
-
-  // Context files
-  if ((task.context_files || []).length) {
-    html += `<div class="d-section"><div class="d-label">Context Files</div><ul class="file-list">`;
-    task.context_files.forEach(f => { html += `<li>${esc(f)}</li>`; });
-    html += `</ul></div>`;
   }
 
   panel.innerHTML = html;
@@ -1080,11 +1119,46 @@ function getMatchSnippet(task, query) {
   // Tags
   const tag = (task.tags || []).find(t => t.toLowerCase().includes(q.toLowerCase()));
   if (tag) return `<span style="opacity:.6">tag: </span>${highlightText(tag, q)}`;
-  // File paths
-  const files = [...(task.produces || []), ...(task.context_files || [])];
-  const f = files.find(p => p.toLowerCase().includes(q.toLowerCase()));
-  if (f) return `<span style="opacity:.6">file: </span>${highlightText(f, q)}`;
   return null;
+}
+
+// ── Source chain (progenitor trace) ──────────────────────────
+// Returns an array from root (human) to the given task, e.g.:
+// [ {type:'human'}, {type:'task',task:T1}, {type:'task',task:T2}, {type:'task',task:current} ]
+function getSourceChain(taskId) {
+  const chain = [];
+  const seen = new Set();
+  let current = taskMap[taskId];
+  while (current) {
+    if (seen.has(current.id)) break;
+    seen.add(current.id);
+    chain.unshift({ type: 'task', task: current });
+    const src = current.source;
+    if (!src || src === 'human') {
+      chain.unshift({ type: 'human' });
+      break;
+    }
+    if (!taskMap[src]) break; // source task not found, stop
+    current = taskMap[src];
+  }
+  return chain;
+}
+
+// Build source-based tree: tasks grouped by what created them.
+// Returns { roots: [...taskIds], childrenOf: { sourceId -> [...taskIds] } }
+function buildSourceTree() {
+  const childrenOf = {}; // sourceTaskId -> [taskIds created by it]
+  const humanRoots = [];
+  allTasks.forEach(t => {
+    const src = t.source;
+    if (!src || src === 'human') {
+      humanRoots.push(t.id);
+    } else {
+      if (!childrenOf[src]) childrenOf[src] = [];
+      childrenOf[src].push(t.id);
+    }
+  });
+  return { roots: humanRoots, childrenOf };
 }
 
 // ── Utilities ────────────────────────────────────────────────
@@ -1428,22 +1502,63 @@ loadTasks();
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Favicon SVG (TL0 text on a colored background)
+# ──────────────────────────────────────────────────────────────────────────────
+_FAVICON_SVG_TEMPLATE = """\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="{color}"/>
+  <text x="16" y="22" text-anchor="middle" font-family="sans-serif"
+        font-size="11" font-weight="bold" fill="white">TL0</text>
+</svg>"""
+
+
+def _build_favicon_svg(color: str) -> str:
+    return _FAVICON_SVG_TEMPLATE.format(color=color)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # HTTP server
 # ──────────────────────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
+    page_title: str = "tl0 Task Viewer"
+    header_bg: str = "#111827"
+    favicon_svg: str = _build_favicon_svg("#111827")
+
     def do_GET(self):
         path = urlparse(self.path).path
 
         if path in ('/', '/index.html'):
-            body = HTML.encode('utf-8')
+            rendered = HTML.replace('{{PAGE_TITLE}}', html.escape(self.page_title)) \
+                          .replace('{{HEADER_BG}}', self.header_bg)
+            body = rendered.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        elif path == '/favicon.svg':
+            body = self.favicon_svg.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/svg+xml')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         elif path == '/api/tasks':
-            tasks = load_all_tasks()
+            raw = load_all_tasks()
+            # Inject derived fields so the frontend can treat them as plain properties
+            tasks = []
+            for t in raw:
+                t = dict(t)
+                t["status"]        = task_status(t)
+                t["claimed_by"]    = task_claimed_by(t)
+                t["claimed_at"]    = task_last_claimed_at(t)
+                t["completed_at"]  = task_completed_at(t)
+                t["created_at"]    = task_created_at(t)
+                t["tasks_created"] = t.get("task_children", [])
+                t["source"]        = t.get("task_parent") or "human"
+                tasks.append(t)
             body  = json.dumps(tasks).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1459,16 +1574,38 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def _find_free_port() -> int:
+    """Ask the OS for a free port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Open the task viewer in your browser')
-    parser.add_argument('--port', type=int, default=7474,
-                        help='Local port to serve on (default: 7474)')
+    parser.add_argument('--port', type=int, default=0,
+                        help='Local port to serve on (default: random free port)')
     parser.add_argument('--no-open', action='store_true',
                         help="Don't auto-open the browser")
     args = parser.parse_args(argv)
 
-    server = HTTPServer(('127.0.0.1', args.port), Handler)
-    url    = f'http://localhost:{args.port}'
+    port = args.port or _find_free_port()
+
+    # Derive page title from the current directory name
+    dir_name = Path.cwd().name
+    page_title = f"{dir_name} — tl0 Task Viewer"
+
+    # Load config for optional viewer_color
+    config = load_config()
+    header_bg = config.get("viewer_color", "#111827")
+
+    # Configure handler with dynamic values
+    Handler.page_title = page_title
+    Handler.header_bg = header_bg
+    Handler.favicon_svg = _build_favicon_svg(header_bg)
+
+    server = HTTPServer(('127.0.0.1', port), Handler)
+    url    = f'http://localhost:{port}'
 
     if not args.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

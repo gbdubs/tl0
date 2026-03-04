@@ -4,7 +4,7 @@ import sys
 from datetime import datetime, timezone
 from collections import Counter
 
-from tl0.common import load_all_tasks, task_status_map
+from tl0.common import load_all_tasks, task_status_map, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at
 
 
 TRUNC = 60
@@ -41,47 +41,38 @@ def main(argv: list[str] | None = None):
         return
 
     status_map = task_status_map(tasks)
-    counts = Counter(t["status"] for t in tasks)
+    counts = Counter(task_status(t) for t in tasks)
     total = len(tasks)
 
     # Header
     parts = []
-    for s in ["done", "in-progress", "claimed", "pending", "stuck"]:
+    for s in ["done", "claimed", "pending"]:
         c = counts.get(s, 0)
         if c:
             parts.append(f"{c} {s}")
     print(f"  {total} tasks: {', '.join(parts)}")
     print()
 
-    # Active work (claimed + in-progress)
-    active = [t for t in tasks if t["status"] in ("claimed", "in-progress")]
-    active.sort(key=lambda t: t.get("claimed_at") or t.get("updated_at") or "")
+    # Active work (claimed)
+    active = [t for t in tasks if task_status(t) == "claimed"]
+    active.sort(key=lambda t: task_last_claimed_at(t) or "")
     if active:
         print(f"  ACTIVE ({len(active)})")
         for t in active:
-            agent = t.get("claimed_by") or "?"
-            when = ago(t.get("claimed_at"))
+            agent = task_claimed_by(t) or "?"
+            when = ago(task_last_claimed_at(t))
             model = f"[{t['model']:6s}]  " if t.get("model") else ""
             print(f"    {t['id'][:8]}  {model}{trunc(t['title'])}  ({agent}, {when})")
-        print()
-
-    # Stuck
-    stuck = [t for t in tasks if t["status"] == "stuck"]
-    if stuck:
-        print(f"  STUCK ({len(stuck)})")
-        for t in stuck:
-            model = f"[{t['model']:6s}]  " if t.get("model") else ""
-            print(f"    {t['id'][:8]}  {model}{trunc(t['title'])}")
         print()
 
     # Ready to claim
     ready = []
     for t in tasks:
-        if t["status"] != "pending" or t["claimed_by"] is not None:
+        if task_status(t) != "pending":
             continue
         if all(status_map.get(bid) == "done" for bid in t.get("blocked_by", [])):
             ready.append(t)
-    ready.sort(key=lambda t: t.get("created_at", ""))
+    ready.sort(key=lambda t: task_created_at(t) or "")
     if ready:
         print(f"  READY ({len(ready)})")
         for t in ready[:15]:
@@ -98,30 +89,30 @@ def main(argv: list[str] | None = None):
         print()
 
     # Recently completed
-    done = [t for t in tasks if t["status"] == "done" and t.get("completed_at")]
-    done.sort(key=lambda t: t["completed_at"], reverse=True)
+    done = [t for t in tasks if task_status(t) == "done" and task_completed_at(t)]
+    done.sort(key=lambda t: task_completed_at(t), reverse=True)
     if done:
         print(f"  RECENTLY DONE")
         for t in done[:10]:
-            when = ago(t["completed_at"])
+            when = ago(task_completed_at(t))
             print(f"    {t['id'][:8]}  {trunc(t['title'])}  ({when})")
         if len(done) > 10:
             print(f"    ... and {len(done) - 10} more completed")
         print()
 
     # Recently created
-    by_created = sorted(tasks, key=lambda t: t.get("created_at", ""), reverse=True)
+    by_created = sorted(tasks, key=lambda t: task_created_at(t) or "", reverse=True)
     print(f"  RECENTLY CREATED")
     for t in by_created[:10]:
-        when = ago(t["created_at"])
-        status = t["status"]
+        when = ago(task_created_at(t))
+        status = task_status(t)
         print(f"    {t['id'][:8]}  {status:12s}  {trunc(t['title'])}  ({when})")
     if len(by_created) > 10:
         print(f"    ... and {len(by_created) - 10} more")
     print()
 
     # Model breakdown for non-done tasks
-    remaining = [t for t in tasks if t["status"] != "done"]
+    remaining = [t for t in tasks if task_status(t) != "done"]
     models_present = [t["model"] for t in remaining if t.get("model")]
     if models_present:
         model_counts = Counter(models_present)

@@ -7,10 +7,9 @@ pending so they can be claimed for implementation.
 
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
-from tl0.common import TASKS_FOLDER, load_all_tasks, git_commit
+from tl0.common import TASKS_FOLDER, load_all_tasks, task_status, now_iso, git_commit
 
 
 def main(argv: list[str] | None = None):
@@ -33,10 +32,8 @@ def main(argv: list[str] | None = None):
     skip_has_children = 0
     skip_no_marker = 0
 
-    now = datetime.now(timezone.utc).isoformat()
-
     for task_id, task in tasks.items():
-        if task["status"] != "done":
+        if task_status(task) != "done":
             skip_not_done += 1
             continue
 
@@ -49,12 +46,9 @@ def main(argv: list[str] | None = None):
             skip_no_marker += 1
             continue
 
-        task["status"] = "pending"
-        task["claimed_by"] = None
-        task["claimed_at"] = None
-        task["completed_at"] = None
+        # Append a freed event to reset to pending, and clear result
+        task["events"].append({"type": "freed", "at": now_iso(), "by": "reset_for_execution"})
         task["result"] = None
-        task["updated_at"] = now
 
         task_path = TASKS_FOLDER / f"{task_id}.json"
         with open(task_path, "w") as fh:

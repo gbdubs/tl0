@@ -7,11 +7,9 @@
     "id",
     "title",
     "description",
-    "status",
-    "created_at",
-    "updated_at",
     "blocked_by",
-    "tags"
+    "tags",
+    "events"
   ],
   "properties": {
     "id": {
@@ -30,34 +28,30 @@
       "minLength": 1,
       "description": "Detailed description sufficient for an agent to execute without ambiguity."
     },
-    "status": {
-      "type": "string",
-      "enum": ["pending", "claimed", "in-progress", "done", "stuck"],
-      "description": "Current lifecycle state."
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp of task creation."
-    },
-    "updated_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp of last modification."
-    },
-    "claimed_by": {
-      "type": ["string", "null"],
-      "description": "Agent identifier that claimed this task."
-    },
-    "claimed_at": {
-      "type": ["string", "null"],
-      "format": "date-time",
-      "description": "When the task was claimed."
-    },
-    "completed_at": {
-      "type": ["string", "null"],
-      "format": "date-time",
-      "description": "When the task was completed."
+    "events": {
+      "type": "array",
+      "description": "Append-only log of lifecycle events. First event is always 'created'. Status is derived from the last non-created event.",
+      "items": {
+        "type": "object",
+        "required": ["type", "at"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["created", "claimed", "freed", "done"],
+            "description": "Event type."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp when this event occurred."
+          },
+          "by": {
+            "type": "string",
+            "description": "Agent or human identifier responsible for this event."
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "blocked_by": {
       "type": "array",
@@ -102,17 +96,17 @@
     },
     "result": {
       "type": ["string", "null"],
-      "description": "Summary of what happened when completed."
+      "description": "Summary of what happened when completed. Set when a done event is appended."
     },
-    "tasks_created": {
+    "task_children": {
       "type": "array",
       "items": { "type": "string", "format": "uuid" },
       "description": "IDs of child tasks this task produced."
     },
-    "parent_task": {
+    "task_parent": {
       "type": ["string", "null"],
       "format": "uuid",
-      "description": "ID of the task that spawned this one."
+      "description": "ID of the task that spawned this one. Null if created directly by a human."
     }
   },
   "additionalProperties": false

@@ -3,7 +3,7 @@
 import argparse
 import json
 
-from tl0.common import load_all_tasks, task_status_map, VALID_MODELS
+from tl0.common import load_all_tasks, task_status_map, task_status, task_created_at, VALID_MODELS
 
 
 def main(argv: list[str] | None = None):
@@ -18,8 +18,7 @@ def main(argv: list[str] | None = None):
 
     ready = []
     for task in tasks:
-        # Must be pending and unclaimed
-        if task["status"] != "pending" or task["claimed_by"] is not None:
+        if task_status(task) != "pending":
             continue
 
         # All blockers must be done
@@ -39,7 +38,7 @@ def main(argv: list[str] | None = None):
         ready.append(task)
 
     # Sort by creation time (oldest first)
-    ready.sort(key=lambda t: t.get("created_at", ""))
+    ready.sort(key=lambda t: task_created_at(t) or "")
 
     if args.limit > 0:
         ready = ready[:args.limit]

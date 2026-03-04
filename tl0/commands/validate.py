@@ -4,11 +4,11 @@ import json
 import sys
 from pathlib import Path
 
-from tl0.common import TASKS_DIR, TASKS_FOLDER, SCHEMA_PATH, load_all_tasks, save_task, VALID_STATUSES, VALID_MODELS
+from tl0.common import TASKS_DIR, TASKS_FOLDER, SCHEMA_PATH, load_all_tasks, save_task, task_status, VALID_MODELS
 
 # Fields that hold UUID references to other tasks
-_REF_LIST_FIELDS = ("blocked_by", "tasks_created")
-_REF_SCALAR_FIELDS = ("parent_task",)
+_REF_LIST_FIELDS = ("blocked_by", "task_children")
+_REF_SCALAR_FIELDS = ("task_parent",)
 
 
 def resolve_truncated_ref(ref: str, all_ids: set) -> str | None:
@@ -65,34 +65,37 @@ def validate_task(task: dict, schema: dict, all_ids: set) -> list[str]:
     if not expected_path.exists():
         errors.append(f"{tid}: filename does not match id")
 
-    # Check enum fields
-    if task.get("status") not in VALID_STATUSES:
-        errors.append(f"{tid}: invalid status '{task.get('status')}'")
     if "model" in task and task["model"] is not None and VALID_MODELS and task["model"] not in VALID_MODELS:
         errors.append(f"{tid}: invalid model '{task.get('model')}'")
+
+    # Check events are well-formed
+    for i, event in enumerate(task.get("events", [])):
+        if not isinstance(event, dict):
+            errors.append(f"{tid}: events[{i}] must be an object")
+            continue
+        if event.get("type") not in ("created", "claimed", "freed", "done"):
+            errors.append(f"{tid}: events[{i}].type '{event.get('type')}' is invalid")
+        if "at" not in event:
+            errors.append(f"{tid}: events[{i}] missing 'at' timestamp")
+
+    # Check done tasks have result
+    if task_status(task) == "done" and not task.get("result"):
+        errors.append(f"{tid}: status is 'done' but result is not set")
 
     # Check blocked_by references exist
     for bid in task.get("blocked_by", []):
         if bid not in all_ids:
             errors.append(f"{tid}: blocked_by references non-existent task {bid}")
 
-    # Check parent_task reference exists
-    parent = task.get("parent_task")
+    # Check task_parent reference exists
+    parent = task.get("task_parent")
     if parent and parent not in all_ids:
-        errors.append(f"{tid}: parent_task references non-existent task {parent}")
+        errors.append(f"{tid}: task_parent references non-existent task {parent}")
 
-    # Check tasks_created references exist
-    for cid in task.get("tasks_created", []):
+    # Check task_children references exist
+    for cid in task.get("task_children", []):
         if cid not in all_ids:
-            errors.append(f"{tid}: tasks_created references non-existent task {cid}")
-
-    # Check claimed tasks have claimed_by
-    if task.get("status") in ("claimed", "in-progress") and not task.get("claimed_by"):
-        errors.append(f"{tid}: status is '{task['status']}' but claimed_by is empty")
-
-    # Check done tasks have result
-    if task.get("status") == "done" and not task.get("result"):
-        errors.append(f"{tid}: status is 'done' but result is empty")
+            errors.append(f"{tid}: task_children references non-existent task {cid}")
 
     # Check no unexpected fields
     allowed = set(schema.get("properties", {}).keys())

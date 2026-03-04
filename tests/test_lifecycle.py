@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from tl0.common import load_all_tasks, load_task, save_task, task_status_map
+from tl0.common import load_all_tasks, load_task, save_task, task_status_map, task_status, task_claimed_by, task_completed_at
 
 
 class TestTaskLifecycle:
@@ -14,11 +14,11 @@ class TestTaskLifecycle:
         task = make_task(title="Build widget", description="Build a widget component")
         loaded = load_task(task["id"])
         assert loaded["title"] == "Build widget"
-        assert loaded["status"] == "pending"
+        assert task_status(loaded) == "pending"
 
     def test_save_validates(self, tasks_dir, make_task):
         task = make_task()
-        task["status"] = "banana"
+        task["events"].append({"type": "banana", "at": "2024-01-01T00:00:00+00:00"})
         with pytest.raises(SystemExit):
             save_task(task)
 
@@ -37,29 +37,26 @@ class TestTaskLifecycle:
     def test_claim_flow(self, tasks_dir, make_task):
         task = make_task(title="Claimable task")
 
-        # Claim it
-        from tl0.common import now_iso, git_commit
-        task["status"] = "claimed"
-        task["claimed_by"] = "test-agent"
-        task["claimed_at"] = now_iso()
-        task["updated_at"] = now_iso()
+        # Claim it by appending an event
+        from tl0.common import now_iso
+        task["events"].append({"type": "claimed", "at": now_iso(), "by": "test-agent"})
         save_task(task)
 
         loaded = load_task(task["id"])
-        assert loaded["status"] == "claimed"
-        assert loaded["claimed_by"] == "test-agent"
+        assert task_status(loaded) == "claimed"
+        assert task_claimed_by(loaded) == "test-agent"
 
     def test_complete_flow(self, tasks_dir, make_task):
         task = make_task(title="Completable task", status="claimed", claimed_by="agent-1")
 
-        task["status"] = "done"
         task["result"] = "Built the widget."
-        task["completed_at"] = "2024-01-01T00:00:00+00:00"
+        task["events"].append({"type": "done", "at": "2024-01-01T00:00:00+00:00", "by": "agent-1"})
         save_task(task)
 
         loaded = load_task(task["id"])
-        assert loaded["status"] == "done"
+        assert task_status(loaded) == "done"
         assert loaded["result"] == "Built the widget."
+        assert task_completed_at(loaded) == "2024-01-01T00:00:00+00:00"
 
     def test_blocked_task_not_ready(self, tasks_dir, make_task):
         blocker = make_task(title="Blocker", status="pending")
@@ -91,17 +88,75 @@ class TestTaskLifecycle:
 
     def test_parent_child_linking(self, tasks_dir, make_task):
         parent = make_task(title="Parent task")
-        child = make_task(title="Child task", parent_task=parent["id"])
+        child = make_task(title="Child task", task_parent=parent["id"])
 
-        # Update parent's tasks_created
-        parent["tasks_created"] = [child["id"]]
+        # Update parent's task_children
+        parent["task_children"] = [child["id"]]
         save_task(parent)
 
         loaded_parent = load_task(parent["id"])
-        assert child["id"] in loaded_parent["tasks_created"]
+        assert child["id"] in loaded_parent["task_children"]
 
         loaded_child = load_task(child["id"])
-        assert loaded_child["parent_task"] == parent["id"]
+        assert loaded_child["task_parent"] == parent["id"]
+
+
+class TestTaskParent:
+    def test_default_parent_is_none(self, tasks_dir, make_task):
+        task = make_task(title="Human task")
+        loaded = load_task(task["id"])
+        assert loaded["task_parent"] is None
+
+    def test_parent_from_task(self, tasks_dir, make_task):
+        parent = make_task(title="Parent task")
+        child = make_task(title="Child task", task_parent=parent["id"])
+        loaded = load_task(child["id"])
+        assert loaded["task_parent"] == parent["id"]
+
+    def test_trace_root_task(self, tasks_dir, make_task):
+        from tl0.commands.trace import main as trace_main
+        import io
+        from contextlib import redirect_stdout
+
+        task = make_task(title="Root task")
+        f = io.StringIO()
+        with redirect_stdout(f):
+            trace_main([task["id"], "--json"])
+        chain = json.loads(f.getvalue())
+        assert len(chain) == 1
+        assert chain[0]["id"] == task["id"]
+        assert "task_parent" not in chain[0]
+
+    def test_trace_chain(self, tasks_dir, make_task):
+        from tl0.commands.trace import main as trace_main
+        import io
+        from contextlib import redirect_stdout
+
+        root = make_task(title="Root task")
+        mid = make_task(title="Mid task", task_parent=root["id"])
+        leaf = make_task(title="Leaf task", task_parent=mid["id"])
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            trace_main([leaf["id"], "--json"])
+        chain = json.loads(f.getvalue())
+        assert len(chain) == 3
+        assert chain[0]["id"] == leaf["id"]
+        assert chain[1]["id"] == mid["id"]
+        assert chain[2]["id"] == root["id"]
+
+    def test_trace_missing_parent_task(self, tasks_dir, make_task):
+        from tl0.commands.trace import main as trace_main
+        import io
+        from contextlib import redirect_stdout
+
+        task = make_task(title="Orphan", task_parent="00000000-0000-0000-0000-000000000000")
+        f = io.StringIO()
+        with redirect_stdout(f):
+            trace_main([task["id"], "--json"])
+        chain = json.loads(f.getvalue())
+        assert len(chain) == 2
+        assert "error" in chain[1]
 
 
 class TestCycleDetection:

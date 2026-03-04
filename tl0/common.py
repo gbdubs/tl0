@@ -14,24 +14,90 @@ _config = load_config()
 
 TASKS_DIR = resolve_tasks_dir(_config)
 TASKS_FOLDER = TASKS_DIR / "tasks"
+TRANSCRIPTS_FOLDER = TASKS_DIR / "transcripts"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.json"
 
-VALID_STATUSES = {"pending", "claimed", "in-progress", "done", "stuck"}
+VALID_STATUSES = {"pending", "claimed", "done"}
 VALID_MODELS = set(_config.get("valid_models", ["opus", "sonnet", "haiku"]))
 
 REQUIRED_FIELDS = {
-    "id", "title", "description", "status", "created_at", "updated_at",
-    "blocked_by", "tags"
+    "id", "title", "description", "blocked_by", "tags", "events"
 }
 
 OPTIONAL_FIELDS = {
     "model", "thinking",
-    "claimed_by", "claimed_at", "completed_at", "design_references",
-    "produces", "context_files", "result", "tasks_created", "parent_task"
+    "design_references", "produces", "context_files",
+    "result", "task_children", "task_parent",
 }
 
 ALL_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 
+VALID_EVENT_TYPES = {"created", "claimed", "freed", "done"}
+
+
+# ---------------------------------------------------------------------------
+# Status derivation (pure functions over events)
+# ---------------------------------------------------------------------------
+
+def task_status(task: dict) -> str:
+    """Derive status from the task's event log. Returns 'pending', 'claimed', or 'done'.
+
+    The 'created' event is skipped — only lifecycle events determine status.
+    """
+    for event in reversed(task.get("events", [])):
+        if event["type"] == "claimed":
+            return "claimed"
+        if event["type"] == "done":
+            return "done"
+        if event["type"] == "freed":
+            return "pending"
+        # skip "created"
+    return "pending"
+
+
+def task_claimed_by(task: dict) -> str | None:
+    """Return the agent from the most recent claimed event, or None if not currently claimed."""
+    if task_status(task) != "claimed":
+        return None
+    for event in reversed(task.get("events", [])):
+        if event["type"] == "claimed":
+            return event.get("by")
+    return None
+
+
+def task_last_claimed_at(task: dict) -> str | None:
+    """Return the timestamp of the most recent claimed event, or None."""
+    for event in reversed(task.get("events", [])):
+        if event["type"] == "claimed":
+            return event["at"]
+    return None
+
+
+def task_completed_at(task: dict) -> str | None:
+    """Return the timestamp of the done event, or None."""
+    for event in reversed(task.get("events", [])):
+        if event["type"] == "done":
+            return event["at"]
+    return None
+
+
+def task_created_at(task: dict) -> str | None:
+    """Return the timestamp of the 'created' event (first event), or None."""
+    events = task.get("events", [])
+    if events and events[0]["type"] == "created":
+        return events[0]["at"]
+    return None
+
+
+def task_updated_at(task: dict) -> str | None:
+    """Return the timestamp of the last event."""
+    events = task.get("events", [])
+    return events[-1]["at"] if events else None
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
 def validate_task_shape(task: dict) -> list[str]:
     """Validate a task dict against the expected schema. Returns list of error strings."""
@@ -62,15 +128,32 @@ def validate_task_shape(task: dict) -> list[str]:
             errors.append(f"'description' must be a string, got {type(task['description']).__name__}")
         elif len(task["description"]) == 0:
             errors.append("'description' must not be empty")
-    if "status" in task and task["status"] not in VALID_STATUSES:
-        errors.append(f"'status' must be one of {sorted(VALID_STATUSES)}, got '{task['status']}'")
     if "model" in task and task["model"] is not None and VALID_MODELS and task["model"] not in VALID_MODELS:
         errors.append(f"'model' must be one of {sorted(VALID_MODELS)}, got '{task['model']}'")
     if "thinking" in task and task["thinking"] is not None and not isinstance(task["thinking"], bool):
         errors.append(f"'thinking' must be a boolean, got {type(task['thinking']).__name__}")
 
+    # events array
+    if "events" in task:
+        if not isinstance(task["events"], list):
+            errors.append(f"'events' must be an array, got {type(task['events']).__name__}")
+        else:
+            for i, event in enumerate(task["events"]):
+                if not isinstance(event, dict):
+                    errors.append(f"'events[{i}]' must be an object")
+                    continue
+                if "type" not in event:
+                    errors.append(f"'events[{i}]' missing required 'type' field")
+                elif event["type"] not in VALID_EVENT_TYPES:
+                    errors.append(f"'events[{i}].type' must be one of {sorted(VALID_EVENT_TYPES)}, got '{event['type']}'")
+                if "at" not in event:
+                    errors.append(f"'events[{i}]' missing required 'at' field")
+                for key in event:
+                    if key not in ("type", "at", "by"):
+                        errors.append(f"'events[{i}]' has unexpected field '{key}'")
+
     # Array fields
-    for field in ("blocked_by", "tags", "produces", "context_files", "tasks_created"):
+    for field in ("blocked_by", "tags", "produces", "context_files", "task_children"):
         if field in task:
             if not isinstance(task[field], list):
                 errors.append(f"'{field}' must be an array, got {type(task[field]).__name__}")
@@ -78,7 +161,7 @@ def validate_task_shape(task: dict) -> list[str]:
                 errors.append(f"'{field}' must contain only strings")
 
     # Nullable string fields
-    for field in ("claimed_by", "claimed_at", "completed_at", "result", "parent_task"):
+    for field in ("result", "task_parent"):
         if field in task and task[field] is not None and not isinstance(task[field], str):
             errors.append(f"'{field}' must be a string or null, got {type(task[field]).__name__}")
 
@@ -93,14 +176,17 @@ def validate_task_shape(task: dict) -> list[str]:
                 elif "file" not in ref:
                     errors.append(f"'design_references[{i}]' missing required 'file' field")
 
-    # Consistency checks
-    if task.get("status") in ("claimed", "in-progress") and not task.get("claimed_by"):
-        errors.append(f"Status is '{task['status']}' but 'claimed_by' is not set")
-    if task.get("status") == "done" and not task.get("result"):
-        errors.append("Status is 'done' but 'result' is not set")
+    # Consistency checks (derived from events)
+    if "events" in task and isinstance(task["events"], list):
+        if task_status(task) == "done" and not task.get("result"):
+            errors.append("Last event is 'done' but 'result' is not set")
 
     return errors
 
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
 
 def resolve_prefix(prefix: str, tasks: list[dict] | None = None) -> dict:
     """Resolve a UUID prefix to a single task. Exits on no match or ambiguity."""
@@ -174,5 +260,5 @@ def git_commit(message: str):
 
 
 def task_status_map(tasks: list[dict]) -> dict[str, str]:
-    """Build a map of task_id -> status."""
-    return {t["id"]: t["status"] for t in tasks}
+    """Build a map of task_id -> derived status."""
+    return {t["id"]: task_status(t) for t in tasks}
