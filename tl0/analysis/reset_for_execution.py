@@ -24,8 +24,8 @@ def main(argv: list[str] | None = None):
     # Build set of parent IDs (tasks that have children)
     parent_ids = set()
     for task in tasks.values():
-        if task.get("parent_task"):
-            parent_ids.add(task["parent_task"])
+        if task.get("task_parent"):
+            parent_ids.add(task["task_parent"])
 
     reset_count = 0
     skip_not_done = 0

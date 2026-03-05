@@ -12,7 +12,7 @@ You are auditing the task DAG. Many tasks are missing `blocked_by` edges — the
 # Step 1: Build or refresh the catalog
 
 ```bash
-tl0 catalog
+tl0h catalog
 ```
 
 Then read the catalog file in your tasks directory. This is your reference for all tasks in the system.
@@ -30,7 +30,7 @@ Default to `unblocked`.
 
 # Step 3: For each task in the batch, analyze dependencies
 
-For each task, read it with `tl0 show <uuid>` and reason through:
+For each task, read it with `tl0h show <uuid>` and reason through:
 
 ## 3a. What does this task REQUIRE to exist before it can be implemented?
 
@@ -67,7 +67,7 @@ Create a JSON file at `.context/dep-audit-proposals.json`:
 # Step 5: Dry-run validation
 
 ```bash
-tl0 apply-deps .context/dep-audit-proposals.json --dry-run
+tl0h apply-deps .context/dep-audit-proposals.json --dry-run
 ```
 
 # Step 6: Report
@@ -76,7 +76,7 @@ Output a summary of how many tasks audited, new edges proposed, etc.
 
 Do NOT apply automatically. The user will apply with:
 ```bash
-tl0 apply-deps .context/dep-audit-proposals.json
+tl0h apply-deps .context/dep-audit-proposals.json
 ```
 
 # Rules

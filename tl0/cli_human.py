@@ -97,6 +97,27 @@ def main():
     # free-all
     sub.add_parser("free-all", help="Free all claimed tasks back to pending")
 
+    # status
+    sub.add_parser("status", help="Show compact task system dashboard")
+
+    # validate
+    sub.add_parser("validate", help="Validate all tasks and report errors")
+
+    # reset
+    sub.add_parser("reset", help="Delete all tasks (destructive)")
+
+    # trace
+    sub.add_parser("trace", help="Trace a task back to its progenitor")
+
+    # transcript
+    sub.add_parser("transcript", help="Show execution transcript for a task")
+
+    # catalog
+    sub.add_parser("catalog", help="Build task catalog markdown for dependency auditing")
+
+    # apply-deps
+    sub.add_parser("apply-deps", help="Apply dependency audit proposals to the task tree")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
 
@@ -136,6 +157,34 @@ def main():
 
     elif cmd in ("free-all",):
         from tl0.commands.free_all import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("status",):
+        from tl0.commands.status import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("validate",):
+        from tl0.commands.validate import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("reset",):
+        from tl0.commands.reset import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("trace",):
+        from tl0.commands.trace import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("transcript",):
+        from tl0.commands.transcript import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("catalog",):
+        from tl0.analysis.build_catalog import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("apply-deps",):
+        from tl0.analysis.apply_deps import main as cmd_main
         cmd_main(remaining)
 
     else:

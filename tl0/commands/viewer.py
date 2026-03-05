@@ -1557,7 +1557,7 @@ class Handler(BaseHTTPRequestHandler):
                 t["completed_at"]  = task_completed_at(t)
                 t["created_at"]    = task_created_at(t)
                 t["tasks_created"] = t.get("task_children", [])
-                t["source"]        = t.get("task_parent") or "human"
+                t["parent_task"]   = t.get("task_parent")
                 tasks.append(t)
             body  = json.dumps(tasks).encode('utf-8')
             self.send_response(200)
