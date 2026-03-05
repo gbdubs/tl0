@@ -1031,8 +1031,6 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 t["claimed_at"]    = task_last_claimed_at(t)
                 t["completed_at"]  = task_completed_at(t)
                 t["created_at"]    = task_created_at(t)
-                t["tasks_created"] = t.get("task_children", [])
-                t["source"]        = t.get("task_parent") or "human"
                 tasks.append(t)
             self._respond_json(tasks)
 

@@ -11,14 +11,13 @@ This is an analysis pass across the task tree. You are NOT decomposing or implem
 # Step 1: Load the full task tree
 
 ```bash
-tl0 show --brief --status pending
-tl0 show --brief --status done
-tl0 show --brief --status stuck
+tl0h show --brief --status pending
+tl0h show --brief --status done
 ```
 
 If the user passed arguments, focus on that area:
-- Tag filter: `tl0 show --brief --tag <value>`
-- UUID: `tl0 show <prefix>` for a specific subtree
+- Tag filter: `tl0h show --brief --tag <value>`
+- UUID: `tl0h show <prefix>` for a specific subtree
 
 # Step 2: Pick a review focus
 
@@ -46,4 +45,4 @@ Check leaf tasks for sizing. Reset oversized "atomic" tasks to `type:decompose`.
 - Tasks created
 - Recommendations for next review focus
 
-Run `tl0 validate` at the end.
+Run `tl0h validate` at the end.

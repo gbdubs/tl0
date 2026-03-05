@@ -11,7 +11,7 @@ This is the batch orchestrator for `/dependency-audit`. It processes the ENTIRE 
 # Step 1: Build the catalog and check progress
 
 ```bash
-tl0 catalog
+tl0h catalog
 ```
 
 Check if prior audit work exists:
@@ -32,12 +32,12 @@ For each batch:
 - Analyze each task (same reasoning as `/dependency-audit`)
 - Append proposals to `.context/dep-audit-proposals.json`
 - Update `.context/dep-audit-progress.json`
-- Validate periodically with `tl0 apply-deps ... --dry-run`
+- Validate periodically with `tl0h apply-deps ... --dry-run`
 
 # Step 4: Final report
 
 ```bash
-tl0 apply-deps .context/dep-audit-proposals.json --dry-run
+tl0h apply-deps .context/dep-audit-proposals.json --dry-run
 ```
 
 # Resumability
