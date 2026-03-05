@@ -212,6 +212,7 @@ run_claude() {
   CLAUDE_OUTPUT=""
   CLAUDE_OUTPUT=$(cd "$worktree" && claude -p \
     --model "$model" \
+    --verbose \
     --dangerously-skip-permissions \
     --output-format stream-json \
     ${resume_session_id:+--resume "$resume_session_id"} \
