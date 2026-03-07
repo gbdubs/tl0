@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-from tl0.common import load_all_tasks, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at
+from tl0.common import load_all_tasks, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at, task_updated_at, TRANSCRIPTS_FOLDER
 from tl0.config import load_config
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -73,6 +73,13 @@ body {
   font-size: 11px; transition: background 0.1s;
 }
 #refresh-btn:hover { background: #4b5563; }
+#chart-mode-btn {
+  padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  background: #374151; border: 1px solid #4b5563; color: #e5e7eb;
+  font-size: 11px; transition: all 0.1s;
+}
+#chart-mode-btn:hover { background: #4b5563; }
+#chart-mode-btn.active { background: #2563eb; border-color: #3b82f6; color: white; }
 
 /* ── App shell ──────────────────────────────────────────────── */
 #app { display: flex; flex: 1; overflow: hidden; }
@@ -130,12 +137,16 @@ body {
   flex-shrink: 0;
   padding: 8px 12px;
 }
-.tag-group { margin-bottom: 8px; }
-.tag-group-label {
+.tag-group { margin-bottom: 4px; }
+.tag-group-header {
+  display: flex; align-items: center; gap: 4px;
   font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 4px;
+  letter-spacing: 0.6px; color: var(--text-muted);
+  cursor: pointer; padding: 2px 0; user-select: none;
 }
-.tag-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.tag-group-header:hover { color: var(--text); }
+.tag-group-arrow { font-size: 8px; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .tag-chip {
   padding: 2px 7px; border-radius: 10px; cursor: pointer;
   font-size: 11px; background: #f3f4f6; color: var(--text-muted);
@@ -310,6 +321,72 @@ body {
   color: #be123c; margin-bottom: 14px;
 }
 
+/* ── Event timeline ───────────────────────────────────────── */
+.event-timeline { display: flex; flex-direction: column; gap: 0; }
+.event-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; font-size: 12px; position: relative;
+}
+.event-row:not(:last-child)::before {
+  content: ''; position: absolute; left: 5px; top: 18px; bottom: -4px;
+  width: 1px; background: #e5e7eb;
+}
+.event-dot {
+  width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid white; box-shadow: 0 0 0 1px #d1d5db;
+}
+.event-type { font-weight: 600; width: 60px; flex-shrink: 0; }
+.event-time { color: var(--text-muted); font-size: 11px; }
+.event-by { color: var(--text-muted); font-size: 11px; font-family: monospace; }
+
+/* ── Execution summary ────────────────────────────────────── */
+.exec-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.exec-stat label { display: block; font-size: 10px; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
+.exec-stat value { display: block; font-size: 13px; font-weight: 500; }
+.exec-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.exec-tool {
+  padding: 2px 7px; border-radius: 10px; font-size: 10px;
+  background: #eff6ff; color: #2563eb; font-family: monospace;
+}
+.exec-invocation {
+  background: #f9fafb; border-radius: 6px; padding: 8px 10px;
+  margin-bottom: 6px; font-size: 12px;
+}
+.exec-invocation-header {
+  display: flex; align-items: center; gap: 8px; font-weight: 500;
+  margin-bottom: 4px;
+}
+.log-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  z-index: 1000; display: flex; align-items: center; justify-content: center;
+}
+.log-panel {
+  background: #1e1e1e; color: #d4d4d4; border-radius: 12px;
+  width: min(90vw, 900px); max-height: 85vh; display: flex; flex-direction: column;
+  box-shadow: 0 25px 50px rgba(0,0,0,.5);
+}
+.log-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid #333; flex-shrink: 0;
+}
+.log-panel-header h3 { color: #e5e7eb; font-size: 14px; font-weight: 600; margin: 0; }
+.log-panel-close {
+  background: none; border: none; color: #9ca3af; font-size: 20px;
+  cursor: pointer; padding: 4px 8px; border-radius: 4px;
+}
+.log-panel-close:hover { background: #333; color: white; }
+.log-panel-body {
+  flex: 1; overflow: auto; padding: 12px 16px;
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+}
+.log-btn {
+  padding: 3px 8px; border-radius: 5px; cursor: pointer;
+  background: #374151; border: 1px solid #4b5563; color: #e5e7eb;
+  font-size: 11px; transition: background 0.1s;
+}
+.log-btn:hover { background: #4b5563; }
+
 /* ── Nav buttons ───────────────────────────────────────────── */
 .nav-btn {
   width: 28px; height: 28px; border-radius: 5px; cursor: pointer;
@@ -391,6 +468,7 @@ mark {
   <button class="nav-btn" id="nav-back" onclick="navBack()" disabled title="Back (Alt+←)">←</button>
   <button class="nav-btn" id="nav-fwd"  onclick="navFwd()"  disabled title="Forward (Alt+→)">→</button>
   <div id="stats">Loading…</div>
+  <button id="chart-mode-btn" onclick="toggleChartMode()">Chart</button>
   <button id="refresh-btn" onclick="refresh()">↺ Refresh</button>
 </div>
 
@@ -420,10 +498,6 @@ mark {
 
     <div id="view-row">
       <span id="result-count"></span>
-      <button class="view-btn active" data-view="tree" onclick="setView('tree')">Tree</button>
-      <button class="view-btn" data-view="source" onclick="setView('source')">Source</button>
-      <button class="view-btn" data-view="list" onclick="setView('list')">List</button>
-      <button class="view-btn" data-view="chart" onclick="setView('chart')">Chart</button>
     </div>
 
     <div id="task-list-container">
@@ -452,14 +526,15 @@ let allTasks = [];
 let taskMap  = {};
 
 const state = {
-  selectedId:          null,
-  statusFilter:        'all',
-  modelFilter:         'all',
-  activeTags:          [],
-  search:              '',
-  view:                'tree',
-  expandedNodes:       new Set(),
-  detailExpandedNodes: new Set(),
+  selectedId:            null,
+  statusFilter:          'all',
+  modelFilter:           'all',
+  activeTags:            [],
+  search:                '',
+  view:                  'tree',
+  expandedNodes:         new Set(),
+  detailExpandedNodes:   new Set(),
+  expandedTagCategories: new Set(),
 };
 
 // ── Navigation history (← →) ─────────────────────────────────
@@ -512,9 +587,10 @@ function loadSavedState() {
     if (s.modelFilter)  state.modelFilter   = s.modelFilter;
     if (s.activeTags)   state.activeTags    = s.activeTags;
     if (s.search)       state.search        = s.search;
-    if (s.view)         state.view          = s.view;
-    if (s.expandedNodes)       state.expandedNodes       = new Set(s.expandedNodes);
-    if (s.detailExpandedNodes) state.detailExpandedNodes = new Set(s.detailExpandedNodes);
+    if (s.view) state.view = (['tree','chart'].includes(s.view) ? s.view : 'tree');
+    if (s.expandedNodes)         state.expandedNodes         = new Set(s.expandedNodes);
+    if (s.detailExpandedNodes)   state.detailExpandedNodes   = new Set(s.detailExpandedNodes);
+    if (s.expandedTagCategories) state.expandedTagCategories = new Set(s.expandedTagCategories);
   } catch (_) {}
 }
 function persist() {
@@ -526,8 +602,9 @@ function persist() {
       activeTags:    state.activeTags,
       search:        state.search,
       view:          state.view,
-      expandedNodes:       [...state.expandedNodes],
-      detailExpandedNodes: [...state.detailExpandedNodes],
+      expandedNodes:           [...state.expandedNodes],
+      detailExpandedNodes:     [...state.detailExpandedNodes],
+      expandedTagCategories:   [...state.expandedTagCategories],
     }));
   } catch (_) {}
 }
@@ -561,11 +638,107 @@ async function loadTasks() {
       // On refresh, re-render the open task in case data changed
       renderDetail(state.selectedId);
     }
+    schedulePoll();
   } catch (e) {
     document.getElementById('task-list').innerHTML =
       `<div class="no-results">Failed to load tasks: ${e.message}</div>`;
   }
 }
+
+let _pollTimer = null;
+function schedulePoll() {
+  if (_pollTimer) clearTimeout(_pollTimer);
+  const hasActive = allTasks.some(t => t.status === 'pending' || t.status === 'claimed' || t.status === 'in-progress');
+  if (hasActive) _pollTimer = setTimeout(loadTasks, 30000);
+}
+
+// ── Transcript cache & helpers ────────────────────────────────
+const _transcriptCache = {};
+async function fetchTranscript(taskId) {
+  if (_transcriptCache[taskId]) return _transcriptCache[taskId];
+  try {
+    const res = await fetch('/api/transcripts/' + taskId);
+    if (!res.ok) return null;
+    const data = await res.json();
+    _transcriptCache[taskId] = data;
+    return data;
+  } catch (_) { return null; }
+}
+
+async function showLoopLog(taskId) {
+  try {
+    const res = await fetch('/api/loop-log/' + taskId);
+    if (!res.ok) return;
+    const text = await res.text();
+    const overlay = document.createElement('div');
+    overlay.className = 'log-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="log-panel">
+      <div class="log-panel-header">
+        <h3>Loop Log — ${taskId.slice(0,8)}</h3>
+        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
+      </div>
+      <div class="log-panel-body">${esc(text)}</div>
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch (_) {}
+}
+
+function renderEventTimeline(events) {
+  const colorMap = {created:'#9ca3af', claimed:'#3b82f6', freed:'#fb923c', done:'#22c55e'};
+  let html = '<div class="event-timeline">';
+  events.forEach(e => {
+    const c = colorMap[e.type] || '#9ca3af';
+    const d = new Date(e.at);
+    const timeStr = d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    html += `<div class="event-row">
+      <div class="event-dot" style="background:${c};box-shadow:0 0 0 1px ${c}"></div>
+      <span class="event-type">${e.type}</span>
+      <span class="event-time">${timeStr}</span>
+      ${e.by ? `<span class="event-by">${esc(e.by)}</span>` : ''}
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderExecSection(tx) {
+  let html = '<div class="exec-grid">';
+  if (tx.total_duration_ms != null) {
+    const secs = (tx.total_duration_ms / 1000).toFixed(1);
+    html += `<div class="exec-stat"><label>Duration</label><value>${secs}s</value></div>`;
+  }
+  if (tx.total_cost_usd != null) {
+    html += `<div class="exec-stat"><label>Cost</label><value>$${tx.total_cost_usd.toFixed(4)}</value></div>`;
+  }
+  if (tx.invocations && tx.invocations.length) {
+    const turns = tx.invocations.reduce((s, i) => s + (i.num_turns || 0), 0);
+    html += `<div class="exec-stat"><label>Turns</label><value>${turns}</value></div>`;
+  }
+  html += '</div>';
+  // Invocations detail
+  if (tx.invocations) {
+    tx.invocations.forEach(inv => {
+      html += `<div class="exec-invocation">`;
+      html += `<div class="exec-invocation-header">`;
+      html += `<span style="font-family:monospace;font-size:11px">${esc(inv.file)}</span>`;
+      if (inv.model) html += `<span class="d-badge badge-${inv.model.includes('opus')?'opus':inv.model.includes('sonnet')?'sonnet':'haiku'}" style="font-size:10px;padding:1px 6px">${esc(inv.model)}</span>`;
+      if (inv.duration_ms != null) html += `<span style="color:var(--text-muted);font-size:11px">${(inv.duration_ms/1000).toFixed(1)}s</span>`;
+      if (inv.cost_usd != null) html += `<span style="color:var(--text-muted);font-size:11px">$${inv.cost_usd.toFixed(4)}</span>`;
+      html += `</div>`;
+      if (inv.tool_usage && Object.keys(inv.tool_usage).length) {
+        html += `<div class="exec-tools">`;
+        Object.entries(inv.tool_usage).sort((a,b) => b[1]-a[1]).forEach(([name, count]) => {
+          html += `<span class="exec-tool">${esc(name)} ×${count}</span>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+  return html;
+}
+
 async function refresh() {
   document.getElementById('stats').textContent = 'Refreshing…';
   await loadTasks();
@@ -605,20 +778,37 @@ function renderTagFilters() {
 
   Object.keys(groups).sort().forEach(cat => {
     const tags = Object.entries(groups[cat]).sort((a, b) => b[1] - a[1]);
-    const div  = document.createElement('div');
+    const isExpanded = state.expandedTagCategories.has(cat);
+    const activeInCat = tags.filter(([tag]) => state.activeTags.includes(tag)).length;
+    const div = document.createElement('div');
     div.className = 'tag-group';
-    div.innerHTML = `<div class="tag-group-label">${esc(cat)} <span style="font-weight:400;opacity:.5">${tags.length}</span></div><div class="tag-chips"></div>`;
-    const chips = div.querySelector('.tag-chips');
-    tags.forEach(([tag, count]) => {
-      const chip = document.createElement('span');
-      chip.className = 'tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
-      chip.textContent = tag.includes(':') ? tag.split(':')[1] : tag;
-      chip.title = `${tag} (${count} tasks)`;
-      chip.onclick = () => toggleTag(tag);
-      chips.appendChild(chip);
-    });
+    const header = document.createElement('div');
+    header.className = 'tag-group-header';
+    header.innerHTML = `<span class="tag-group-arrow">${isExpanded ? '▾' : '▸'}</span><span>${esc(cat)}</span><span style="font-weight:400;opacity:.5;margin-left:3px">${tags.length}</span>${activeInCat ? `<span style="margin-left:auto;font-size:9px;background:var(--accent-bg);color:var(--accent);border-radius:8px;padding:0 5px">${activeInCat} active</span>` : ''}`;
+    header.onclick = () => toggleTagCategory(cat);
+    div.appendChild(header);
+    if (isExpanded) {
+      const chipsEl = document.createElement('div');
+      chipsEl.className = 'tag-chips';
+      tags.forEach(([tag, count]) => {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
+        chip.textContent = tag.includes(':') ? tag.split(':')[1] : tag;
+        chip.title = `${tag} (${count} tasks)`;
+        chip.onclick = e => { e.stopPropagation(); toggleTag(tag); };
+        chipsEl.appendChild(chip);
+      });
+      div.appendChild(chipsEl);
+    }
     section.appendChild(div);
   });
+}
+
+function toggleTagCategory(cat) {
+  if (state.expandedTagCategories.has(cat)) state.expandedTagCategories.delete(cat);
+  else state.expandedTagCategories.add(cat);
+  persist();
+  renderTagFilters();
 }
 
 function toggleTag(tag) {
@@ -658,13 +848,16 @@ function getFiltered() {
 function setView(v) {
   state.view = v;
   persist();
-  document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   const isChart = v === 'chart';
+  document.getElementById('chart-mode-btn').classList.toggle('active', isChart);
   document.getElementById('task-list-container').style.display = isChart ? 'none' : '';
   document.getElementById('detail').style.display = isChart ? 'none' : '';
   document.getElementById('chart-container').classList.toggle('visible', isChart);
   if (isChart) renderChart();
   else renderTaskList();
+}
+function toggleChartMode() {
+  setView(state.view === 'chart' ? 'tree' : 'chart');
 }
 
 function renderTaskList() {
@@ -679,18 +872,10 @@ function renderTaskList() {
     return;
   }
 
-  // Use tree only when not actively searching / tag-filtering (so hierarchy is meaningful)
-  const useTree = (state.view === 'tree' || state.view === 'source') && !state.search.trim() && state.activeTags.length === 0;
+  // Use tree when not actively searching / tag-filtering (so hierarchy is meaningful)
+  const useTree = !state.search.trim() && state.activeTags.length === 0;
 
-  if (useTree && state.view === 'source') {
-    // Source tree: group tasks by what created them (source field)
-    const filteredIds = new Set(filtered.map(t => t.id));
-    const { roots, childrenOf } = buildSourceTree();
-    const filteredRoots = roots
-      .filter(id => filteredIds.has(id))
-      .sort((a, b) => (taskMap[a]?.created_at || '').localeCompare(taskMap[b]?.created_at || ''));
-    filteredRoots.forEach(id => renderSourceTree(taskMap[id], container, 0, filteredIds, childrenOf));
-  } else if (useTree) {
+  if (useTree) {
     const filteredIds = new Set(filtered.map(t => t.id));
     // Roots: tasks whose parent is absent or not in filteredIds
     const roots = filtered
@@ -976,6 +1161,28 @@ function renderDetail(id) {
   html += metaItem('Full ID', `<span style="font-family:monospace;font-size:11px">${task.id}</span>`);
   html += `</div></div>`;
 
+  // Event timeline
+  if (task.events && task.events.length) {
+    html += `<div class="d-section"><div class="d-label">Events</div>`;
+    html += renderEventTimeline(task.events);
+    html += `</div>`;
+  }
+
+  // Execution summary (loaded async)
+  html += `<div id="exec-section-${task.id.slice(0,8)}"></div>`;
+  if (task.status === 'claimed' || task.status === 'done') {
+    fetchTranscript(task.id).then(tx => {
+      const el = document.getElementById('exec-section-' + task.id.slice(0,8));
+      if (!el || !tx || !tx.has_transcript) return;
+      let s = '<div class="d-section"><div class="d-label" style="display:flex;align-items:center;justify-content:space-between">Execution';
+      if (tx.has_loop_log) s += ` <button class="log-btn" onclick="showLoopLog('${task.id}')">View Loop Log</button>`;
+      s += '</div>';
+      s += renderExecSection(tx);
+      s += '</div>';
+      el.innerHTML = s;
+    });
+  }
+
   // Tags
   if ((task.tags || []).length) {
     html += `<div class="d-section"><div class="d-label">Tags</div><div class="d-tags">`;
@@ -1051,6 +1258,16 @@ function renderDetail(id) {
   if ((task.blocked_by || []).length) {
     html += `<div class="d-section"><div class="d-label">Blocked By (${task.blocked_by.length})</div>`;
     task.blocked_by.forEach(id => { html += taskLink(id); });
+    html += `</div>`;
+  }
+
+  // Blocking (tasks that list this task in their blocked_by)
+  const blocking = Object.values(taskMap).filter(t => (t.blocked_by || []).includes(task.id));
+  if (blocking.length) {
+    const allDone = blocking.every(t => t.status === 'done');
+    const label = allDone ? 'Blocked (all done)' : 'Blocking';
+    html += `<div class="d-section"><div class="d-label">${label} (${blocking.length})</div>`;
+    blocking.forEach(t => { html += taskLink(t.id); });
     html += `</div>`;
   }
 
@@ -1483,12 +1700,8 @@ if (state.modelFilter !== 'all') {
   );
 }
 if (state.search) document.getElementById('search').value = state.search;
-if (state.view !== 'tree') {
-  document.querySelectorAll('.view-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.view === state.view)
-  );
-}
 if (state.view === 'chart') {
+  document.getElementById('chart-mode-btn').classList.add('active');
   document.getElementById('task-list-container').style.display = 'none';
   document.getElementById('detail').style.display = 'none';
   document.getElementById('chart-container').classList.add('visible');
@@ -1514,6 +1727,82 @@ _FAVICON_SVG_TEMPLATE = """\
 
 def _build_favicon_svg(color: str) -> str:
     return _FAVICON_SVG_TEMPLATE.format(color=color)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Transcript summary builder
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _build_transcript_summary(task_id: str) -> dict:
+    """Build a JSON-serialisable summary of transcript data for a task."""
+    transcript_dir = TRANSCRIPTS_FOLDER / task_id
+    if not transcript_dir.is_dir():
+        return {"has_transcript": False}
+
+    loop_log = transcript_dir / "loop.log"
+    jsonl_files = sorted(transcript_dir.glob("*.jsonl"))
+
+    invocations = []
+    total_cost = 0.0
+    total_duration = 0
+
+    for jf in jsonl_files:
+        events = []
+        for line in jf.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        inv: dict = {"file": jf.name, "num_events": len(events)}
+
+        # Count tool usage from assistant events
+        tool_counts: dict[str, int] = {}
+        for e in events:
+            if e.get("type") == "assistant" and isinstance(e.get("message", {}).get("content"), list):
+                for block in e["message"]["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name", "unknown")
+                        tool_counts[name] = tool_counts.get(name, 0) + 1
+        if tool_counts:
+            inv["tool_usage"] = tool_counts
+
+        # Extract result event data
+        for e in reversed(events):
+            if e.get("type") == "result":
+                inv["num_turns"] = e.get("num_turns", 0)
+                inv["duration_ms"] = e.get("duration_ms", 0)
+                inv["cost_usd"] = e.get("total_cost_usd", 0)
+                total_cost += inv["cost_usd"]
+                total_duration += inv["duration_ms"]
+                # Model from modelUsage
+                mu = e.get("modelUsage", {})
+                if mu:
+                    inv["model"] = next(iter(mu), None)
+                # Result preview
+                result = e.get("result", "")
+                if isinstance(result, list):
+                    result = " ".join(
+                        b.get("text", "") for b in result
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                if result:
+                    inv["result_preview"] = result[:200]
+                break
+
+        invocations.append(inv)
+
+    return {
+        "has_transcript": True,
+        "has_loop_log": loop_log.exists(),
+        "loop_log_lines": len(loop_log.read_text().splitlines()) if loop_log.exists() else 0,
+        "invocations": invocations,
+        "total_cost_usd": total_cost,
+        "total_duration_ms": total_duration,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1556,6 +1845,7 @@ class Handler(BaseHTTPRequestHandler):
                 t["claimed_at"]    = task_last_claimed_at(t)
                 t["completed_at"]  = task_completed_at(t)
                 t["created_at"]    = task_created_at(t)
+                t["updated_at"]    = task_updated_at(t)
                 t["tasks_created"] = t.get("task_children", [])
                 t["parent_task"]   = t.get("task_parent")
                 tasks.append(t)
@@ -1565,6 +1855,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        elif path.startswith('/api/transcripts/'):
+            task_id = path.split('/')[-1]
+            summary = _build_transcript_summary(task_id)
+            body = json.dumps(summary).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path.startswith('/api/loop-log/'):
+            task_id = path.split('/')[-1]
+            log_path = TRANSCRIPTS_FOLDER / task_id / 'loop.log'
+            if log_path.exists():
+                body = log_path.read_text().encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
 
         else:
             self.send_response(404)
