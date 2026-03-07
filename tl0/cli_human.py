@@ -118,6 +118,9 @@ def main():
     # apply-deps
     sub.add_parser("apply-deps", help="Apply dependency audit proposals to the task tree")
 
+    # reset-quota-errors
+    sub.add_parser("reset-quota-errors", help="Reset tasks erroneously completed due to quota/rate-limit errors")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
 
@@ -185,6 +188,10 @@ def main():
 
     elif cmd in ("apply-deps",):
         from tl0.analysis.apply_deps import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("reset-quota-errors",):
+        from tl0.commands.reset_quota_errors import main as cmd_main
         cmd_main(remaining)
 
     else:
