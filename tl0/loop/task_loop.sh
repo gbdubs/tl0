@@ -229,6 +229,74 @@ run_claude() {
   return $claude_exit
 }
 
+# Check a transcript file for quota rejection.
+# Outputs the resetsAt timestamp if rejected, empty otherwise.
+# Returns 0 if quota was rejected, 1 if not.
+check_quota_rejected() {
+  local transcript_file="$1"
+  python3 -c "
+import json, sys
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get('type') == 'rate_limit_event':
+        info = msg.get('rate_limit_info', {})
+        if info.get('status') == 'rejected':
+            print(info.get('resetsAt', ''))
+            sys.exit(0)
+    if msg.get('type') == 'result' and msg.get('is_error'):
+        text = msg.get('result', '')
+        if isinstance(text, str) and 'hit your limit' in text.lower():
+            print('')
+            sys.exit(0)
+sys.exit(1)
+" 2>/dev/null
+}
+
+# Extract quota utilization info from a transcript file.
+# Outputs JSON with utilization data, or empty string if none found.
+extract_quota_info() {
+  local transcript_file="$1"
+  python3 -c "
+import json, sys, time
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get('type') == 'rate_limit_event':
+        info = msg.get('rate_limit_info', {})
+        out = {
+            'timestamp': int(time.time()),
+            'status': info.get('status', ''),
+            'rate_limit_type': info.get('rateLimitType', ''),
+            'utilization': info.get('utilization'),
+            'resets_at': info.get('resetsAt'),
+        }
+        print(json.dumps(out))
+        sys.exit(0)
+" 2>/dev/null
+}
+
+# Write quota info to shared directory (if running under supervisor).
+write_quota_info() {
+  local transcript_file="$1"
+  [[ -z "${TL0_QUOTA_DIR:-}" ]] && return 0
+  local info
+  info=$(extract_quota_info "$transcript_file")
+  [[ -z "$info" ]] && return 0
+  local slot_id="${TL0_LOOP_SLOT_ID:-$$}"
+  echo "$info" > "$TL0_QUOTA_DIR/${slot_id}.json" 2>/dev/null || true
+}
+
 mkdir -p "$WORKTREE_BASE"
 
 # Build find args
@@ -504,8 +572,27 @@ Use 'tl0m' for all task operations (create subtasks, mark done, etc.)."
     write_status "executing" "$task_id" "$title"
     run_claude "execute" "$worktree" "$model" "$prompt" || claude_exit=$?
 
-    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
+    # --- Check for quota rejection ---
     local transcript_file="$TASK_TRANSCRIPT_DIR/01-execute.jsonl"
+    write_quota_info "$transcript_file"
+
+    local resets_at=""
+    if resets_at=$(check_quota_rejected "$transcript_file"); then
+      warn "Quota/rate-limit rejection detected. Freeing task."
+      if [[ -n "$resets_at" ]]; then
+        local reset_time
+        reset_time=$(date -r "$resets_at" "+%H:%M %Z" 2>/dev/null || echo "unknown")
+        log "    Quota resets at: $reset_time (ts=$resets_at)"
+      fi
+      write_status "quota_rejected" "$task_id" "$title"
+      tl0m free 2>/dev/null || true
+      cleanup_worktree "$short_id"
+      TASK_TRANSCRIPT_DIR=""
+      TASK_SESSION_ID=""
+      return 2  # special exit: quota rejected
+    fi
+
+    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
     TASK_SESSION_ID=$(python3 -c "
 import json, sys
 for line in open('$transcript_file'):
@@ -525,6 +612,7 @@ for line in open('$transcript_file'):
     fi
 
     # Extract final text result from the stream-json transcript.
+    # Skip results where is_error is true (e.g. quota errors, API failures).
     claude_stdout=$(python3 -c "
 import json, sys
 text_parts = []
@@ -537,6 +625,8 @@ for line in open('$transcript_file'):
     except json.JSONDecodeError:
         continue
     if msg.get('type') == 'result':
+        if msg.get('is_error'):
+            continue
         result = msg.get('result', '')
         if isinstance(result, str):
             text_parts.append(result)
@@ -720,8 +810,15 @@ while true; do
     continue
   fi
 
-  if run_task "$task_json"; then
+  run_task_exit=0
+  run_task "$task_json" || run_task_exit=$?
+
+  if [ "$run_task_exit" -eq 0 ]; then
     tasks_completed=$((tasks_completed + 1))
+  elif [ "$run_task_exit" -eq 2 ]; then
+    log "Quota rejected. Backing off for 5 minutes..."
+    write_status "quota_backoff"
+    sleep 300
   else
     log "Task failed. Continuing to next task..."
   fi
