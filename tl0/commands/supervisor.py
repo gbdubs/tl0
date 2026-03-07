@@ -33,7 +33,21 @@ from tl0.common import (
     task_updated_at, TRANSCRIPTS_FOLDER,
 )
 from tl0.config import load_config
-from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary
+from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary, _build_transcript_messages
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bird names for worker naming
+# ──────────────────────────────────────────────────────────────────────────────
+
+BIRD_NAMES = [
+    "Avocet", "Bobolink", "Crow", "Dowitcher", "Egret",
+    "Finch", "Goshawk", "Harrier", "Ibis", "Jay",
+    "Killdeer", "Loon", "Magpie", "Nuthatch", "Oriole",
+    "Parrot", "Quail", "Robin", "Sparrow", "Towhee",
+    "Uguisu", "Vulture", "Waxwing", "Xenops", "Yellowthroat",
+    "Zebra Finch",
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -116,19 +130,38 @@ class SupervisorState:
         self.history: list[dict] = []
         self.status_dir = Path(f"/tmp/tl0-supervisor-{os.getpid()}")
         self.status_dir.mkdir(parents=True, exist_ok=True)
+        self.quota_dir = self.status_dir / "quota"
+        self.quota_dir.mkdir(parents=True, exist_ok=True)
         self.shutting_down = False
         self.total_completed = 0
+        # Quota tracking
+        self.quota_snapshots: list[dict] = []  # [{timestamp, utilization, resets_at, status, ...}]
+        self.quota_auto_drained = False  # True if we auto-drained due to high utilization
+        self._pre_drain_parallelism: int = 0
+
+    def _next_bird_name(self) -> str:
+        """Return the first bird name not currently in use by an active worker."""
+        used = {w.slot_id for w in self.workers.values()}
+        for name in BIRD_NAMES:
+            if name not in used:
+                return name
+        # Fallback if all bird names are taken
+        return f"worker-{uuid.uuid4().hex[:6]}"
 
     def spawn_loop(self) -> LoopWorker:
-        slot_id = uuid.uuid4().hex[:8]
+        bird_name = self._next_bird_name()
+        slot_id = bird_name
         status_file = self.status_dir / f"{slot_id}.json"
 
         env = os.environ.copy()
         env["TL0_LOOP_STATUS_FILE"] = str(status_file)
+        env["TL0_QUOTA_DIR"] = str(self.quota_dir)
+        env["TL0_LOOP_SLOT_ID"] = slot_id
 
         args = [
             "bash", str(self.loop_script),
             "--max-tasks", "1",
+            "--agent", bird_name,
         ] + self.base_loop_args
 
         proc = subprocess.Popen(
@@ -179,10 +212,100 @@ class SupervisorState:
             active_count = len(self.workers)
             deficit = self.desired_parallelism - active_count
 
+        # Read quota files from workers
+        self._collect_quota_snapshots()
+
+        # Auto-drain if utilization >= 90%
+        self._check_auto_drain()
+
+        # Recompute deficit after potential auto-drain (drain sets desired_parallelism = 0)
+        with self._lock:
+            deficit = self.desired_parallelism - len(self.workers)
+
         # Spawn outside the lock
         if deficit > 0 and not self.shutting_down:
             for _ in range(deficit):
                 self.spawn_loop()
+
+    def _collect_quota_snapshots(self):
+        """Read quota info files written by workers."""
+        try:
+            for f in self.quota_dir.glob("*.json"):
+                try:
+                    data = json.loads(f.read_text())
+                    # Only add if newer than our last snapshot
+                    ts = data.get("timestamp", 0)
+                    if not self.quota_snapshots or ts > self.quota_snapshots[-1].get("timestamp", 0):
+                        self.quota_snapshots.append(data)
+                    # Keep last 100 snapshots
+                    if len(self.quota_snapshots) > 100:
+                        self.quota_snapshots = self.quota_snapshots[-100:]
+                except (json.JSONDecodeError, OSError):
+                    pass
+        except OSError:
+            pass
+
+    def _check_auto_drain(self):
+        """Auto-drain pool when quota utilization >= 90%."""
+        if not self.quota_snapshots:
+            return
+        latest = self.quota_snapshots[-1]
+        utilization = latest.get("utilization")
+        status = latest.get("status", "")
+
+        if status == "rejected" or (utilization is not None and utilization >= 0.9):
+            if not self.quota_auto_drained and self.desired_parallelism > 0:
+                self._pre_drain_parallelism = self.desired_parallelism
+                self.quota_auto_drained = True
+                # Drain: stop spawning, kill idle workers
+                self.drain()
+
+        # If quota was auto-drained and resets_at has passed, restore parallelism
+        if self.quota_auto_drained:
+            resets_at = latest.get("resets_at")
+            if resets_at and time.time() > resets_at:
+                self.quota_auto_drained = False
+                if self.desired_parallelism == 0 and self._pre_drain_parallelism > 0:
+                    self.desired_parallelism = self._pre_drain_parallelism
+                    self._pre_drain_parallelism = 0
+
+    def get_quota_info(self) -> dict:
+        """Compute quota status from recent snapshots."""
+        if not self.quota_snapshots:
+            return {"available": False}
+
+        latest = self.quota_snapshots[-1]
+        result = {
+            "available": True,
+            "status": latest.get("status", ""),
+            "utilization": latest.get("utilization"),
+            "resets_at": latest.get("resets_at"),
+            "rate_limit_type": latest.get("rate_limit_type", ""),
+            "last_updated": latest.get("timestamp"),
+            "auto_drained": self.quota_auto_drained,
+            "burn_rate_per_min": None,
+            "projected_exhaustion_min": None,
+        }
+
+        # Compute burn rate from snapshots with utilization data
+        util_points = [
+            (s["timestamp"], s["utilization"])
+            for s in self.quota_snapshots
+            if s.get("utilization") is not None and s.get("timestamp")
+        ]
+        if len(util_points) >= 2:
+            # Use the earliest and latest points for a smoothed rate
+            t0, u0 = util_points[0]
+            t1, u1 = util_points[-1]
+            dt_min = (t1 - t0) / 60.0
+            if dt_min > 0:
+                burn_rate = (u1 - u0) / dt_min  # utilization change per minute
+                result["burn_rate_per_min"] = round(burn_rate, 6)
+                if burn_rate > 0 and u1 is not None:
+                    remaining = 1.0 - u1
+                    result["projected_exhaustion_min"] = round(remaining / burn_rate, 1)
+
+        return result
 
     def get_snapshot(self) -> dict:
         with self._lock:
@@ -388,6 +511,8 @@ body {
 .phase-claimed   { background: #dbeafe; color: #1e40af; }
 .phase-executing { background: #fef3c7; color: #92400e; }
 .phase-merging   { background: #d1fae5; color: #065f46; }
+.phase-quota_rejected { background: #fee2e2; color: #991b1b; }
+.phase-quota_backoff  { background: #fee2e2; color: #991b1b; }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; }
@@ -528,6 +653,42 @@ tr:last-child td { border-bottom: none; }
   display: none;
 }
 .form-error.active { display: block; }
+
+/* Quota bar */
+.quota-bar-outer {
+  width: 100%;
+  height: 20px;
+  background: #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.quota-bar-inner {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.5s ease, background 0.3s ease;
+}
+.quota-details {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.quota-details span { white-space: nowrap; }
+.quota-details .label { font-weight: 600; color: var(--text); }
+.quota-auto-drain {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #fee2e2;
+  color: #991b1b;
+  margin-left: 8px;
+}
+
 .form-success {
   color: #065f46;
   font-size: 12px;
@@ -560,6 +721,12 @@ tr:last-child td { border-bottom: none; }
         <button class="btn btn-danger" id="btn-kill" title="Kill all loops immediately">Kill All</button>
         <button class="btn btn-sm" id="btn-free-all" title="Free all claimed tasks back to pending">Free All</button>
       </div>
+    </div>
+
+    <!-- Quota -->
+    <div class="card" id="quota-card" style="display:none">
+      <h2>API Quota</h2>
+      <div id="quota-container"></div>
     </div>
 
     <!-- Active Workers -->
@@ -907,11 +1074,82 @@ document.getElementById('ct-submit').onclick = async () => {
   }
 };
 
+// Quota display
+let quotaData = { available: false };
+
+async function refreshQuota() {
+  try {
+    const res = await fetch('/api/quota');
+    quotaData = await res.json();
+    renderQuota();
+  } catch (e) { /* ignore */ }
+}
+
+function renderQuota() {
+  const card = document.getElementById('quota-card');
+  const container = document.getElementById('quota-container');
+  if (!quotaData.available) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+
+  const util = quotaData.utilization;
+  const pct = util != null ? Math.round(util * 100) : null;
+  const status = quotaData.status || '';
+
+  // Bar color
+  let barColor = '#22c55e'; // green
+  if (status === 'rejected') barColor = '#ef4444'; // red
+  else if (pct != null && pct >= 90) barColor = '#ef4444'; // red
+  else if (pct != null && pct >= 70) barColor = '#f59e0b'; // yellow
+
+  let html = '';
+
+  // Progress bar
+  if (pct != null) {
+    html += '<div class="quota-bar-outer">';
+    html += '<div class="quota-bar-inner" style="width:' + Math.min(pct, 100) + '%;background:' + barColor + '"></div>';
+    html += '</div>';
+  }
+
+  // Details row
+  html += '<div class="quota-details">';
+  if (pct != null) {
+    html += '<span><span class="label">Utilization:</span> ' + pct + '%</span>';
+  }
+  if (status === 'rejected') {
+    html += '<span style="color:#991b1b;font-weight:600">QUOTA EXHAUSTED</span>';
+  }
+  if (quotaData.burn_rate_per_min != null && quotaData.burn_rate_per_min > 0) {
+    html += '<span><span class="label">Burn rate:</span> ' + (quotaData.burn_rate_per_min * 100).toFixed(2) + '%/min</span>';
+  }
+  if (quotaData.projected_exhaustion_min != null && quotaData.projected_exhaustion_min > 0 && status !== 'rejected') {
+    const mins = Math.round(quotaData.projected_exhaustion_min);
+    html += '<span><span class="label">Exhaustion in:</span> ~' + mins + ' min</span>';
+  }
+  if (quotaData.resets_at) {
+    const resetDate = new Date(quotaData.resets_at * 1000);
+    html += '<span><span class="label">Resets:</span> ' + resetDate.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</span>';
+  }
+  if (quotaData.auto_drained) {
+    html += '<span class="quota-auto-drain">AUTO-DRAINED</span>';
+  }
+  if (quotaData.rate_limit_type) {
+    html += '<span><span class="label">Window:</span> ' + escHtml(quotaData.rate_limit_type) + '</span>';
+  }
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
 // Initial load + polling
 refresh();
 refreshTasks();
+refreshQuota();
 setInterval(refresh, 2000);
 setInterval(refreshTasks, 10000);
+setInterval(refreshQuota, 10000);
 </script>
 </body>
 </html>"""
@@ -1044,6 +1282,9 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 tasks.append(t)
             self._respond_json(tasks)
 
+        elif path == '/api/quota':
+            self._respond_json(self.state.get_quota_info())
+
         elif path.startswith('/api/logs/'):
             slot_id = path[len('/api/logs/'):]
             lines = self.state.get_logs(slot_id)
@@ -1062,8 +1303,11 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
                 .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
+                .replace("fetch('/api/transcript-messages/'", "fetch('/viewer/api/transcript-messages/'") \
+                .replace("fetch('/api/all-transcripts')", "fetch('/viewer/api/all-transcripts')") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
-                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'")
+                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
+                .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
@@ -1093,9 +1337,28 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
             self._respond_json(tasks)
 
+        elif path.startswith('/viewer/api/transcript-messages/'):
+            parts = path.split('/')
+            # /viewer/api/transcript-messages/<task_id>/<filename>
+            if len(parts) >= 6:
+                task_id = parts[4]
+                filename = parts[5]
+                self._respond_json(_build_transcript_messages(task_id, filename))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         elif path.startswith('/viewer/api/transcripts/'):
             task_id = path.split('/')[-1]
             self._respond_json(_build_transcript_summary(task_id))
+
+        elif path == '/viewer/api/all-transcripts':
+            result = {}
+            if TRANSCRIPTS_FOLDER.is_dir():
+                for td in TRANSCRIPTS_FOLDER.iterdir():
+                    if td.is_dir():
+                        result[td.name] = _build_transcript_summary(td.name)
+            self._respond_json(result)
 
         elif path.startswith('/viewer/api/loop-log/'):
             task_id = path.split('/')[-1]
@@ -1105,6 +1368,22 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif path.startswith('/viewer/api/diff-stat/'):
+            sha = path.split('/')[-1]
+            if not re.fullmatch(r'[0-9a-fA-F]{6,40}', sha) or not self.code_repo:
+                self._respond_json({'files': 0})
+                return
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', '--numstat', f'{sha}~1..{sha}'],
+                    cwd=self.code_repo,
+                    capture_output=True, text=True, timeout=10,
+                )
+                files = len([l for l in result.stdout.splitlines() if l.strip()]) if result.returncode == 0 else 0
+            except Exception:
+                files = 0
+            self._respond_json({'files': files})
 
         elif path.startswith('/viewer/api/diff/'):
             sha = path.split('/')[-1]
@@ -1256,6 +1535,13 @@ def main(argv=None):
     if args.prompt:
         base_loop_args += ["--prompt", args.prompt]
     base_loop_args += ["--poll", str(args.poll)]
+
+    # Auto-reset any tasks erroneously completed due to quota errors
+    try:
+        from tl0.commands.reset_quota_errors import main as reset_quota_main
+        reset_quota_main([])
+    except Exception as e:
+        print(f"  (quota reset check: {e})")
 
     state = SupervisorState(loop_script, base_loop_args)
     state.set_parallelism(args.parallelism)

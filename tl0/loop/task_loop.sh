@@ -70,7 +70,38 @@ CODE_REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   EXPECTED_EXIT=true; exit 1
 }
 WORKTREE_BASE="$CODE_REPO/.task-worktrees"
-AGENT_ID="task-loop-$$"
+
+# Pick the first bird name not already in use as an agent ID
+_pick_bird_name() {
+  local birds=(
+    Avocet Bobolink Crow Dowitcher Egret
+    Finch Goshawk Harrier Ibis Jay
+    Killdeer Loon Magpie Nuthatch Oriole
+    Parrot Quail Robin Sparrow Towhee
+    Uguisu Vulture Waxwing Xenops Yellowthroat
+    "Zebra Finch"
+  )
+  local used_agents
+  used_agents=$(tl0m find --limit 100 2>/dev/null \
+    | python3 -c "
+import json,sys
+tasks = json.load(sys.stdin)
+agents = set()
+for t in tasks:
+    cb = t.get('claimed_by','')
+    if cb: agents.add(cb)
+print('\n'.join(agents))
+" 2>/dev/null || true)
+  for bird in "${birds[@]}"; do
+    if ! echo "$used_agents" | grep -qxF "$bird"; then
+      echo "$bird"
+      return
+    fi
+  done
+  echo "worker-$$"
+}
+
+AGENT_ID="$(_pick_bird_name)"
 
 # Resolve the transcripts directory from tl0's tasks dir
 TRANSCRIPTS_DIR=$(python3 -c "
@@ -229,6 +260,74 @@ run_claude() {
   return $claude_exit
 }
 
+# Check a transcript file for quota rejection.
+# Outputs the resetsAt timestamp if rejected, empty otherwise.
+# Returns 0 if quota was rejected, 1 if not.
+check_quota_rejected() {
+  local transcript_file="$1"
+  python3 -c "
+import json, sys
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get('type') == 'rate_limit_event':
+        info = msg.get('rate_limit_info', {})
+        if info.get('status') == 'rejected':
+            print(info.get('resetsAt', ''))
+            sys.exit(0)
+    if msg.get('type') == 'result' and msg.get('is_error'):
+        text = msg.get('result', '')
+        if isinstance(text, str) and 'hit your limit' in text.lower():
+            print('')
+            sys.exit(0)
+sys.exit(1)
+" 2>/dev/null
+}
+
+# Extract quota utilization info from a transcript file.
+# Outputs JSON with utilization data, or empty string if none found.
+extract_quota_info() {
+  local transcript_file="$1"
+  python3 -c "
+import json, sys, time
+for line in open('$transcript_file'):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get('type') == 'rate_limit_event':
+        info = msg.get('rate_limit_info', {})
+        out = {
+            'timestamp': int(time.time()),
+            'status': info.get('status', ''),
+            'rate_limit_type': info.get('rateLimitType', ''),
+            'utilization': info.get('utilization'),
+            'resets_at': info.get('resetsAt'),
+        }
+        print(json.dumps(out))
+        sys.exit(0)
+" 2>/dev/null
+}
+
+# Write quota info to shared directory (if running under supervisor).
+write_quota_info() {
+  local transcript_file="$1"
+  [[ -z "${TL0_QUOTA_DIR:-}" ]] && return 0
+  local info
+  info=$(extract_quota_info "$transcript_file")
+  [[ -z "$info" ]] && return 0
+  local slot_id="${TL0_LOOP_SLOT_ID:-$$}"
+  echo "$info" > "$TL0_QUOTA_DIR/${slot_id}.json" 2>/dev/null || true
+}
+
 mkdir -p "$WORKTREE_BASE"
 
 # Build find args
@@ -337,6 +436,8 @@ merge_and_push() {
 
   local max_attempts=20
   local pushed=false
+  local pushed_sha=""
+  local sha_candidate pre_commit_sha
 
   for attempt in $(seq 1 $max_attempts); do
     log "    Squash+push attempt $attempt/$max_attempts..."
@@ -349,9 +450,16 @@ merge_and_push() {
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+      sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+      # If commit was a no-op (no changes), don't record a stale SHA
+      if [ "$sha_candidate" = "$pre_commit_sha" ]; then
+        sha_candidate=""
+      fi
       if git -C "$CODE_REPO" push origin main 2>/dev/null; then
         pushed=true
+        pushed_sha="$sha_candidate"
         break
       fi
       warn "Push rejected (attempt $attempt/$max_attempts). Resetting and retrying..."
@@ -385,9 +493,15 @@ merge_and_push() {
       continue
     fi
 
+    pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+    sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+    if [ "$sha_candidate" = "$pre_commit_sha" ]; then
+      sha_candidate=""
+    fi
     if git -C "$CODE_REPO" push origin main 2>/dev/null; then
       pushed=true
+      pushed_sha="$sha_candidate"
       break
     fi
 
@@ -405,6 +519,7 @@ merge_and_push() {
     return 1
   fi
 
+  MERGE_AND_PUSH_SHA="$pushed_sha"
   return 0
 }
 
@@ -504,8 +619,27 @@ Use 'tl0m' for all task operations (create subtasks, mark done, etc.)."
     write_status "executing" "$task_id" "$title"
     run_claude "execute" "$worktree" "$model" "$prompt" || claude_exit=$?
 
-    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
+    # --- Check for quota rejection ---
     local transcript_file="$TASK_TRANSCRIPT_DIR/01-execute.jsonl"
+    write_quota_info "$transcript_file"
+
+    local resets_at=""
+    if resets_at=$(check_quota_rejected "$transcript_file"); then
+      warn "Quota/rate-limit rejection detected. Freeing task."
+      if [[ -n "$resets_at" ]]; then
+        local reset_time
+        reset_time=$(date -r "$resets_at" "+%H:%M %Z" 2>/dev/null || echo "unknown")
+        log "    Quota resets at: $reset_time (ts=$resets_at)"
+      fi
+      write_status "quota_rejected" "$task_id" "$title"
+      tl0m free 2>/dev/null || true
+      cleanup_worktree "$short_id"
+      TASK_TRANSCRIPT_DIR=""
+      TASK_SESSION_ID=""
+      return 2  # special exit: quota rejected
+    fi
+
+    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
     TASK_SESSION_ID=$(python3 -c "
 import json, sys
 for line in open('$transcript_file'):
@@ -525,6 +659,7 @@ for line in open('$transcript_file'):
     fi
 
     # Extract final text result from the stream-json transcript.
+    # Skip results where is_error is true (e.g. quota errors, API failures).
     claude_stdout=$(python3 -c "
 import json, sys
 text_parts = []
@@ -537,6 +672,8 @@ for line in open('$transcript_file'):
     except json.JSONDecodeError:
         continue
     if msg.get('type') == 'result':
+        if msg.get('is_error'):
+            continue
         result = msg.get('result', '')
         if isinstance(result, str):
             text_parts.append(result)
@@ -628,6 +765,7 @@ if text_parts:
     "$short_id" "$title" "$task_id" "$description" "$duration")"
 
   # --- Squash-merge task branch into main and push ---
+  MERGE_AND_PUSH_SHA=""
   if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg"; then
     warn "Failed to merge and push task branch. Preserving work."
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
@@ -642,9 +780,8 @@ if text_parts:
     return 1
   fi
 
-  # --- Capture merge SHA ---
-  local merge_sha
-  merge_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+  # --- Capture merge SHA (set atomically inside merge_and_push) ---
+  local merge_sha="$MERGE_AND_PUSH_SHA"
 
   # --- Mark task done ---
   if [ -z "$result_text" ]; then
@@ -724,8 +861,15 @@ while true; do
     continue
   fi
 
-  if run_task "$task_json"; then
+  run_task_exit=0
+  run_task "$task_json" || run_task_exit=$?
+
+  if [ "$run_task_exit" -eq 0 ]; then
     tasks_completed=$((tasks_completed + 1))
+  elif [ "$run_task_exit" -eq 2 ]; then
+    log "Quota rejected. Backing off for 5 minutes..."
+    write_status "quota_backoff"
+    sleep 300
   else
     log "Task failed. Continuing to next task..."
   fi

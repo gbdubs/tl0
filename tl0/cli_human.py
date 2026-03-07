@@ -70,6 +70,8 @@ def main():
         prog="tl0h",
         description="tl0 human interface — task coordination for parallel AI agents",
     )
+    parser.add_argument('-C', '--project-dir', type=str,
+                        help='Run as if invoked from this directory')
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # init
@@ -118,8 +120,19 @@ def main():
     # apply-deps
     sub.add_parser("apply-deps", help="Apply dependency audit proposals to the task tree")
 
+    # reset-quota-errors
+    sub.add_parser("reset-quota-errors", help="Reset tasks erroneously completed due to quota/rate-limit errors")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
+
+    # Change working directory before any subcommand imports (which resolve config from cwd)
+    if args.project_dir:
+        target = Path(args.project_dir).expanduser().resolve()
+        if not target.is_dir():
+            print(f"Error: --project-dir '{args.project_dir}' is not a directory", file=sys.stderr)
+            sys.exit(1)
+        os.chdir(target)
 
     if args.command is None:
         parser.print_help()
@@ -185,6 +198,10 @@ def main():
 
     elif cmd in ("apply-deps",):
         from tl0.analysis.apply_deps import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("reset-quota-errors",):
+        from tl0.commands.reset_quota_errors import main as cmd_main
         cmd_main(remaining)
 
     else:
