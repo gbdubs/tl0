@@ -324,6 +324,10 @@ body {
 }
 .d-section.collapsed .d-label::after { transform: rotate(-90deg); }
 .d-section.collapsed .d-label { margin-bottom: 0; }
+.d-collapsed-chips { display: none; margin-left: auto; margin-right: 8px; }
+.d-collapsed-chips .sha-badge { font-size: 11px; padding: 2px 8px; }
+.d-collapsed-chips .sha-github-link { font-size: 11px; }
+.d-section.collapsed .d-collapsed-chips { display: flex; align-items: center; gap: 6px; }
 .d-pre {
   font-size: 13px; line-height: 1.65; color: var(--text);
   white-space: pre-wrap; font-family: inherit; word-break: break-word;
@@ -460,29 +464,46 @@ body {
 .log-btn:hover { background: #4b5563; }
 
 /* ── Diff viewer ──────────────────────────────────────────── */
-.diff2html-panel {
+.diff-panel {
   display: flex; flex-direction: column;
   background: #ffffff; color: var(--text);
 }
-.diff2html-panel .log-panel-header {
-  border-bottom: 1px solid var(--border);
+.diff-panel .log-panel-header { border-bottom: 1px solid var(--border); }
+.diff-panel .log-panel-header h3 { color: var(--text); }
+.diff-panel .log-panel-close { color: var(--text-muted); }
+.diff-panel .log-panel-close:hover { background: #f3f4f6; color: var(--text); }
+.diff-panel .log-panel-body { padding: 0; overflow: auto; flex: 1; background: #ffffff; }
+.diff-file { border-bottom: 1px solid var(--border); }
+.diff-file-header {
+  padding: 4px 10px; background: #f7f7f7; border-bottom: 1px solid var(--border);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 6px;
 }
-.diff2html-panel .log-panel-header h3 { color: var(--text); }
-.diff2html-panel .log-panel-close { color: var(--text-muted); }
-.diff2html-panel .log-panel-close:hover { background: #f3f4f6; color: var(--text); }
-.diff2html-panel .log-panel-body { padding: 0; overflow: auto; flex: 1; background: #ffffff; }
-/* Compact diff2html overrides */
-.d2h-wrapper { font-size: 12px; }
-.d2h-file-list-wrapper { padding: 4px 10px; border-bottom: 1px solid var(--border); }
-.d2h-file-list { margin: 0; padding: 0; }
-.d2h-file-list li { padding: 1px 0; }
-.d2h-file-wrapper { margin: 0; border-radius: 0; border-left: none; border-right: none; border-bottom: 1px solid var(--border); }
-.d2h-file-header { padding: 4px 8px; }
-.d2h-code-line { padding: 0 6px; }
-.d2h-code-linenumber { padding: 0 6px; min-width: 32px; }
-.d2h-diff-tbody tr td { line-height: 1.4; padding-top: 0 !important; padding-bottom: 0 !important; }
-.d2h-code-line-ctn { line-height: 1.4; }
-.d2h-tag { padding: 1px 4px; font-size: 10px; }
+.diff-file-header .diff-tag {
+  font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px;
+}
+.diff-tag-added { background: #dfd; color: #1a7f37; }
+.diff-tag-deleted { background: #fee; color: #cf222e; }
+.diff-tag-modified { background: #fff8c5; color: #9a6700; }
+.diff-code {
+  margin: 0; padding: 0; font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px; line-height: 1.45; overflow-x: auto;
+}
+.diff-code table { border-collapse: collapse; width: 100%; }
+.diff-code td { padding: 0; vertical-align: top; white-space: pre; }
+.diff-code .diff-ln {
+  width: 1px; min-width: 40px; padding: 0 8px; text-align: right;
+  color: rgba(0,0,0,0.3); border-right: 1px solid #eee; user-select: none;
+  background: #fafafa;
+}
+.diff-code .diff-text { padding: 0 10px; }
+.diff-line-add { background: #e6ffec; }
+.diff-line-add .diff-ln { background: #ccffd8; }
+.diff-line-del { background: #ffebe9; }
+.diff-line-del .diff-ln { background: #ffd7d5; }
+.diff-line-hunk { background: #f1f8ff; color: rgba(0,0,0,0.4); }
+.diff-line-hunk .diff-ln { background: #ddf4ff; }
 .sha-badge {
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px;
   background: #f3f4f6; border: 1px solid var(--border); border-radius: 4px;
@@ -512,9 +533,6 @@ body {
   margin-bottom: 12px; border-radius: 8px; padding: 10px 14px;
   font-size: 13px; line-height: 1.6;
 }
-.conv-msg.assistant {
-  background: #eff6ff; border: 1px solid #bfdbfe;
-}
 .conv-msg.user {
   background: #f9fafb; border: 1px solid var(--border);
 }
@@ -522,7 +540,6 @@ body {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.5px; margin-bottom: 6px;
 }
-.conv-msg.assistant .conv-msg-role { color: #2563eb; }
 .conv-msg.user .conv-msg-role { color: #6b7280; }
 .conv-msg-text { white-space: pre-wrap; word-break: break-word; }
 .conv-tool-use {
@@ -576,6 +593,23 @@ body {
   white-space: pre-wrap; word-break: break-word;
   max-height: 300px; overflow-y: auto;
   background: #fffbeb; border-radius: 4px; padding: 6px 8px; margin-top: 4px;
+}
+.conv-unknown-block {
+  background: #fce4ec; border: 1px solid #f48fb1; border-radius: 6px;
+  padding: 8px 10px; margin-top: 6px; font-size: 12px;
+}
+.conv-unknown-block-label {
+  font-size: 11px; font-weight: 600; color: #880e4f;
+}
+.conv-unknown-block-label code {
+  background: #f8bbd0; padding: 1px 4px; border-radius: 3px; font-size: 11px;
+}
+.conv-unknown-block-body {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: #374151;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 300px; overflow-y: auto;
+  background: #fce4ec; border-radius: 4px; padding: 6px 8px; margin-top: 4px;
 }
 .conv-user-full {
   font-family: 'SFMono-Regular', Consolas, monospace;
@@ -775,15 +809,13 @@ mark {
 .modal-btn-danger:hover { background: #b91c1c; }
 #delete-modal-error { color: #dc2626; font-size: 12px; margin-top: 8px; }
 </style>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
-<script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
 </head>
 <body>
 
 <div id="header">
   <h1>Digest Task Viewer</h1>
-  <button class="nav-btn" id="nav-back" onclick="navBack()" disabled title="Back (Alt+←)">←</button>
-  <button class="nav-btn" id="nav-fwd"  onclick="navFwd()"  disabled title="Forward (Alt+→)">→</button>
+  <button class="nav-btn" id="nav-back" onclick="history.back()" title="Back (Alt+←)">←</button>
+  <button class="nav-btn" id="nav-fwd"  onclick="history.forward()" title="Forward (Alt+→)">→</button>
   <div id="stats">Loading…</div>
   <button id="refresh-btn" onclick="refresh()">↺ Refresh</button>
   <div id="view-dropdown-wrap">
@@ -891,70 +923,89 @@ const state = {
   tableFilters:          [],   // [{col, op, value, display}]
 };
 
-// ── Navigation history (← →) ─────────────────────────────────
-const navStack = [];
-let   navPos   = -1;
+// ── URL state helpers ─────────────────────────────────────────
+let _updatingFromUrl = false;
 
-function pushNav(id) {
-  navStack.splice(navPos + 1);   // drop any forward history
-  navStack.push(id);
-  navPos = navStack.length - 1;
-  history.pushState({ taskId: id }, '', '#' + id);
-  updateNavBtns();
+function stateToUrl() {
+  const p = new URLSearchParams();
+  if (state.selectedId)             p.set('id',      state.selectedId);
+  if (state.statusFilter !== 'all') p.set('status',  state.statusFilter);
+  if (state.modelFilter  !== 'all') p.set('model',   state.modelFilter);
+  if (state.activeTags.length)      p.set('tags',    state.activeTags.join(','));
+  if (state.search)                 p.set('q',       state.search);
+  if (state.view !== 'table')       p.set('view',    state.view);
+  if (state.tableFilters.length)    p.set('filters', JSON.stringify(state.tableFilters));
+  return p;
 }
-function navBack() {
-  if (navPos <= 0) return;
-  history.back();
+
+function urlToState() {
+  const p = new URLSearchParams(location.search);
+  state.selectedId   = p.get('id')     || null;
+  state.statusFilter = p.get('status') || 'all';
+  state.modelFilter  = p.get('model')  || 'all';
+  state.activeTags   = p.get('tags')   ? p.get('tags').split(',').filter(Boolean) : [];
+  state.search       = p.get('q')      || '';
+  const v = p.get('view');
+  state.view = (v && ['tree','chart','table'].includes(v)) ? v : 'table';
+  try {
+    const f = p.get('filters');
+    state.tableFilters = f ? JSON.parse(f) : [];
+  } catch (_) { state.tableFilters = []; }
 }
-function navFwd() {
-  if (navPos >= navStack.length - 1) return;
-  history.forward();
+
+function pushUrl(replace = false) {
+  const p = stateToUrl();
+  const url = p.toString() ? '?' + p.toString() : location.pathname;
+  if (replace) history.replaceState(null, '', url);
+  else         history.pushState(null, '', url);
 }
-function updateNavBtns() {
-  document.getElementById('nav-back').disabled = navPos <= 0;
-  document.getElementById('nav-fwd').disabled  = navPos >= navStack.length - 1;
-}
+
 // Handle browser native back/forward
-window.addEventListener('popstate', e => {
-  const id = e.state?.taskId || location.hash.slice(1);
-  if (!id || !taskMap[id]) return;
-  const idx = navStack.lastIndexOf(id);
-  if (idx >= 0) navPos = idx;
-  updateNavBtns();
-  _activateTask(id);
+window.addEventListener('popstate', () => {
+  _updatingFromUrl = true;
+  urlToState();
+  applyStateToUI();
+  renderTagFilters();
+  renderTaskList();
+  if (state.view === 'chart') renderChart();
+  else if (state.view === 'table') renderTable();
+  _updatingFromUrl = false;
 });
 
 // ── localStorage persistence ─────────────────────────────────
 function loadSavedState() {
+  // Legacy hash migration: #<uuid> → ?id=<uuid>
+  if (!location.search && location.hash && location.hash.length > 1) {
+    const hashId = location.hash.slice(1);
+    if (/^[0-9a-f-]{36}$/.test(hashId)) {
+      history.replaceState(null, '', '?id=' + hashId);
+    }
+  }
+  // Phase 1: read navigation state from URL params
+  urlToState();
+  // Phase 2: read UI preferences from localStorage
   try {
     const s = JSON.parse(localStorage.getItem('digest_viewer') || '{}');
-    if (s.selectedId)   state.selectedId   = s.selectedId;
-    if (s.statusFilter) state.statusFilter  = s.statusFilter;
-    if (s.modelFilter)  state.modelFilter   = s.modelFilter;
-    if (s.activeTags)   state.activeTags    = s.activeTags;
-    if (s.search)       state.search        = s.search;
-    if (s.view) state.view = (['tree','chart','table'].includes(s.view) ? s.view : 'tree');
     if (s.sidebarVisible !== undefined) state.sidebarVisible = s.sidebarVisible;
     if (s.expandedNodes)         state.expandedNodes         = new Set(s.expandedNodes);
     if (s.detailExpandedNodes)   state.detailExpandedNodes   = new Set(s.detailExpandedNodes);
     if (s.expandedTagCategories) state.expandedTagCategories = new Set(s.expandedTagCategories);
-    if (Array.isArray(s.tableFilters)) state.tableFilters = s.tableFilters;
   } catch (_) {}
 }
-function persist() {
+
+function persist(replace = false) {
+  if (_updatingFromUrl) return;
+  pushUrl(replace);
+  persistPrefs();
+}
+
+function persistPrefs() {
   try {
     localStorage.setItem('digest_viewer', JSON.stringify({
-      selectedId:    state.selectedId,
-      statusFilter:  state.statusFilter,
-      modelFilter:   state.modelFilter,
-      activeTags:    state.activeTags,
-      search:        state.search,
-      view:          state.view,
-      sidebarVisible: state.sidebarVisible,
-      expandedNodes:           [...state.expandedNodes],
-      detailExpandedNodes:     [...state.detailExpandedNodes],
-      expandedTagCategories:   [...state.expandedTagCategories],
-      tableFilters:            state.tableFilters,
+      sidebarVisible:        state.sidebarVisible,
+      expandedNodes:         [...state.expandedNodes],
+      detailExpandedNodes:   [...state.detailExpandedNodes],
+      expandedTagCategories: [...state.expandedTagCategories],
     }));
   } catch (_) {}
 }
@@ -969,22 +1020,18 @@ async function loadTasks() {
     updateStats();
     renderTagFilters();
     updateClearFiltersButton();
+    // Always render the task tree sidebar (it's visible in all view modes).
+    // Then render the active main view (chart or table) on top.
+    renderTaskList();
     if (state.view === 'chart') renderChart();
     else if (state.view === 'table') renderTable();
-    else renderTaskList();
     if (_initialLoad) {
       _initialLoad = false;
-      // URL hash takes priority over localStorage on first load
-      const hashId = location.hash.slice(1);
-      const initId = (hashId && taskMap[hashId]) ? hashId
-                   : (state.selectedId && taskMap[state.selectedId]) ? state.selectedId
-                   : null;
-      if (initId) {
-        navStack.push(initId);
-        navPos = 0;
-        history.replaceState({ taskId: initId }, '', '#' + initId);
-        updateNavBtns();
-        _activateTask(initId);
+      if (state.selectedId && taskMap[state.selectedId]) {
+        _activateTask(state.selectedId);
+      } else if (state.selectedId) {
+        state.selectedId = null;
+        persist(true);
       }
     } else if (state.selectedId && taskMap[state.selectedId]) {
       // On refresh, re-render the open task in case data changed
@@ -1064,7 +1111,7 @@ async function executeDelete(includeChildren) {
       state.selectedId = null;
       document.getElementById('task-detail').style.display = 'none';
       document.getElementById('empty-state').style.display = '';
-      persist();
+      persist(true);
     }
     await loadTasks();
   } catch (e) {
@@ -1088,7 +1135,12 @@ async function fetchTranscript(taskId) {
 async function showInvocationDetail(taskId, filename) {
   try {
     const res = await fetch(`/api/transcript-messages/${taskId}/${filename}`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      console.error(`Transcript load failed (${res.status}): ${errText}`);
+      alert(`Failed to load transcript: ${res.status} ${res.statusText}`);
+      return;
+    }
     const messages = await res.json();
     const overlay = document.createElement('div');
     overlay.className = 'log-overlay';
@@ -1122,7 +1174,6 @@ async function showInvocationDetail(taskId, filename) {
         body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${userTextId}')">Show full message</div>`;
         body += `</div>`;
       } else if (msg.role === 'assistant') {
-        body += `<div class="conv-msg assistant"><div class="conv-msg-role">Assistant</div>`;
         (msg.content || []).forEach(block => {
           if (block.type === 'thinking' && block.thinking) {
             const thinkId = 'th-' + (blockCounter++);
@@ -1145,9 +1196,16 @@ async function showInvocationDetail(taskId, filename) {
             body += `</div>`;
             body += renderToolResult(block.id);
             body += `</div>`;
+          } else {
+            const unknownId = 'unk-' + (blockCounter++);
+            const raw = JSON.stringify(block, null, 2);
+            body += `<div class="conv-unknown-block">`;
+            body += `<div class="conv-unknown-block-label">Unhandled block: <code>${esc(block.type || 'unknown')}</code></div>`;
+            body += `<div class="conv-unknown-block-body" id="${unknownId}" style="display:none">${esc(raw)}</div>`;
+            body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${unknownId}')">Show raw</div>`;
+            body += `</div>`;
           }
         });
-        body += `</div>`;
       }
       // tool_result messages are rendered inline above, skip standalone rendering
     });
@@ -1194,32 +1252,69 @@ async function showLoopLog(taskId) {
   } catch (_) {}
 }
 
+function renderDiffHtml(diffText) {
+  const lines = diffText.split('\n');
+  let html = '';
+  let currentFile = null;
+  let fileLines = [];
+  function flushFile() {
+    if (!currentFile) return;
+    const tag = currentFile.tag;
+    const tagCls = tag === 'Added' ? 'diff-tag-added' : tag === 'Deleted' ? 'diff-tag-deleted' : 'diff-tag-modified';
+    html += `<div class="diff-file"><div class="diff-file-header"><span>${esc(currentFile.name)}</span><span class="diff-tag ${tagCls}">${tag}</span></div>`;
+    html += '<div class="diff-code"><table>';
+    for (const fl of fileLines) {
+      const cls = fl.type === '+' ? 'diff-line-add' : fl.type === '-' ? 'diff-line-del' : fl.type === '@' ? 'diff-line-hunk' : '';
+      const ln = fl.ln !== null ? fl.ln : '';
+      html += `<tr class="${cls}"><td class="diff-ln">${ln}</td><td class="diff-text">${esc(fl.text)}</td></tr>`;
+    }
+    html += '</table></div></div>';
+    fileLines = [];
+  }
+  let newLn = 0;
+  for (const line of lines) {
+    if (line.startsWith('diff --git ')) {
+      flushFile();
+      const m = line.match(/b\/(.+)$/);
+      currentFile = { name: m ? m[1] : '?', tag: 'Modified' };
+    } else if (line.startsWith('new file')) {
+      if (currentFile) currentFile.tag = 'Added';
+    } else if (line.startsWith('deleted file')) {
+      if (currentFile) currentFile.tag = 'Deleted';
+    } else if (line.startsWith('@@')) {
+      const m = line.match(/\+(\d+)/);
+      newLn = m ? parseInt(m[1]) : 1;
+      fileLines.push({ type: '@', ln: null, text: line });
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      fileLines.push({ type: '+', ln: newLn++, text: line.slice(1) });
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      fileLines.push({ type: '-', ln: null, text: line.slice(1) });
+    } else if (currentFile && !line.startsWith('\\') && !line.startsWith('index ') && !line.startsWith('---') && !line.startsWith('+++')) {
+      if (line.length > 0 || fileLines.length > 0) {
+        fileLines.push({ type: ' ', ln: newLn++, text: line.startsWith(' ') ? line.slice(1) : line });
+      }
+    }
+  }
+  flushFile();
+  return html;
+}
+
 async function showDiff(sha) {
   try {
     const res = await fetch('/api/diff/' + encodeURIComponent(sha));
     if (!res.ok) { alert('Failed to load diff'); return; }
     const text = await res.text();
-    const containerId = 'diff-container-' + sha;
     const overlay = document.createElement('div');
     overlay.className = 'log-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    overlay.innerHTML = `<div class="log-panel diff2html-panel" style="width:min(95vw,1400px);max-height:90vh">
+    overlay.innerHTML = `<div class="log-panel diff-panel" style="width:min(95vw,1400px);max-height:90vh">
       <div class="log-panel-header">
         <h3>Diff — ${esc(sha.slice(0,8))}</h3>
         <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
       </div>
-      <div class="log-panel-body"><div id="${containerId}" class="d2h-wrapper"></div></div>
+      <div class="log-panel-body">${renderDiffHtml(text)}</div>
     </div>`;
     document.body.appendChild(overlay);
-    const target = document.getElementById(containerId);
-    new Diff2HtmlUI(target, text, {
-      drawFileList: true,
-      fileListToggle: true,
-      fileListStartVisible: true,
-      matching: 'lines',
-      outputFormat: 'line-by-line',
-      highlight: true,
-    }).draw();
   } catch (_) {}
 }
 
@@ -1353,7 +1448,7 @@ function renderTagFilters() {
 function toggleTagCategory(cat) {
   if (state.expandedTagCategories.has(cat)) state.expandedTagCategories.delete(cat);
   else state.expandedTagCategories.add(cat);
-  persist();
+  persistPrefs();
   renderTagFilters();
 }
 
@@ -1413,9 +1508,7 @@ function getFiltered() {
 }
 
 // ── Task list rendering ──────────────────────────────────────
-function setView(v) {
-  state.view = v;
-  persist();
+function _applyView(v) {
   const isChart = v === 'chart';
   const isTable = v === 'table';
   // Keep task list visible in chart and table modes alongside the main view
@@ -1426,9 +1519,14 @@ function setView(v) {
   document.getElementById('chart-container').classList.toggle('visible', isChart && !chartShowsDetail);
   document.getElementById('table-container').classList.toggle('visible', isTable);
   updateViewDropdownItems();
+  renderTaskList();
   if (isChart && !state.selectedId) renderChart();
   else if (isTable) renderTable();
-  else renderTaskList();
+}
+function setView(v) {
+  state.view = v;
+  persist();
+  _applyView(v);
 }
 function updateViewDropdownItems() {
   const isChart = state.view === 'chart';
@@ -1455,7 +1553,7 @@ function closeViewDropdown() {
 }
 function toggleSidebar() {
   state.sidebarVisible = !state.sidebarVisible;
-  persist();
+  persistPrefs();
   document.getElementById('sidebar').classList.toggle('hidden', !state.sidebarVisible);
   updateViewDropdownItems();
 }
@@ -1468,8 +1566,6 @@ function toggleTableMode() {
 
 function renderTaskList() {
   updateClearFiltersButton();
-  if (state.view === 'table') { renderTable(); return; }
-  if (state.view === 'chart' && !state.selectedId) renderChart();
   const filtered   = getFiltered();
   const container  = document.getElementById('task-list');
   container.innerHTML = '';
@@ -1534,7 +1630,7 @@ function renderItem(task, container, depth, hasChildren) {
       e.stopPropagation();
       if (state.expandedNodes.has(task.id)) state.expandedNodes.delete(task.id);
       else state.expandedNodes.add(task.id);
-      persist();
+      persistPrefs();
       renderTaskList();
     };
   }
@@ -1612,17 +1708,16 @@ function renderItem(task, container, depth, hasChildren) {
 function toggleDetailNode(id) {
   if (state.detailExpandedNodes.has(id)) state.detailExpandedNodes.delete(id);
   else state.detailExpandedNodes.add(id);
-  persist();
+  persistPrefs();
   if (state.selectedId) renderDetail(state.selectedId);
 }
 
 function selectTask(id) {
-  pushNav(id);
+  state.selectedId = id;
+  persist();
   _activateTask(id);
 }
 function _activateTask(id) {
-  state.selectedId = id;
-  persist();
   document.querySelectorAll('.task-item').forEach(el =>
     el.classList.toggle('selected', el.dataset.id === id)
   );
@@ -1818,10 +1913,38 @@ function renderDetail(id) {
   html += `</div>`;
 
   // Description
-  html += `<div class="d-section">
+  html += `<div class="d-section collapsed">
     <div class="d-label" onclick="toggleSection(this)">Description</div>
     <div class="d-section-body"><pre class="d-pre">${highlightText(task.description, state.search.trim())}</pre></div>
   </div>`;
+
+  // Result + Commit (collapsed by default, with summary chips when collapsed)
+  if (task.result || task.merge_sha) {
+    let resultSummaryChips = '';
+    if (task.merge_sha) {
+      const shortSha = task.merge_sha.slice(0, 8);
+      resultSummaryChips += `<span class="d-collapsed-chips">`;
+      resultSummaryChips += `<span class="sha-badge" onclick="event.stopPropagation();showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
+      if (window.__GITHUB_REPO_URL__) {
+        resultSummaryChips += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">GitHub ↗</a>`;
+      }
+      resultSummaryChips += `</span>`;
+    }
+    html += `<div class="d-section collapsed"><div class="d-label" onclick="toggleSection(this)"><span>Result</span>${resultSummaryChips}</div>`;
+    html += `<div class="d-section-body">`;
+    if (task.result) html += `<div class="result-box">${esc(task.result)}</div>`;
+    if (task.merge_sha) {
+      const shortSha = task.merge_sha.slice(0, 8);
+      const shaMargin = task.result ? 'margin-top:8px' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;${shaMargin}">`;
+      html += `<span class="sha-badge" onclick="event.stopPropagation();showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
+      if (window.__GITHUB_REPO_URL__) {
+        html += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
 
   // Execution summary (loaded async)
   html += `<div id="exec-section-${task.id.slice(0,8)}"></div>`;
@@ -1839,24 +1962,6 @@ function renderDetail(id) {
       s += '</div></div>';
       el.innerHTML = s;
     });
-  }
-
-  // Result + Commit
-  if (task.result || task.merge_sha) {
-    html += `<div class="d-section"><div class="d-label" onclick="toggleSection(this)">Result</div>`;
-    html += `<div class="d-section-body">`;
-    if (task.result) html += `<div class="result-box">${esc(task.result)}</div>`;
-    if (task.merge_sha) {
-      const shortSha = task.merge_sha.slice(0, 8);
-      const shaMargin = task.result ? 'margin-top:8px' : '';
-      html += `<div style="display:flex;align-items:center;gap:8px;${shaMargin}">`;
-      html += `<span class="sha-badge" onclick="event.stopPropagation();showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
-      if (window.__GITHUB_REPO_URL__) {
-        html += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
-      }
-      html += `</div>`;
-    }
-    html += `</div></div>`;
   }
 
   // Task Lineage (unified: ancestors → current → children)
@@ -2686,7 +2791,7 @@ document.getElementById('search').addEventListener('input', e => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     state.search = e.target.value;
-    persist();
+    persist(true);
     renderTaskList();
   }, 180);
 });
@@ -2701,42 +2806,37 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && document.activeElement === search) {
     search.value = '';
     state.search = '';
-    persist();
+    persist(true);
     renderTaskList();
     search.blur();
   }
-  if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); navBack(); }
-  if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); navFwd();  }
+  if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); history.back(); }
+  if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); history.forward(); }
 });
 
-// ── Boot ─────────────────────────────────────────────────────
-loadSavedState();
-
-// Restore UI state from saved state
-if (state.statusFilter !== 'all') {
+// ── applyStateToUI ────────────────────────────────────────────
+function applyStateToUI() {
   document.querySelectorAll('#status-chips .chip').forEach(c =>
     c.classList.toggle('active', c.dataset.status === state.statusFilter)
   );
-}
-if (state.modelFilter !== 'all') {
   document.querySelectorAll('#model-chips .chip').forEach(c =>
     c.classList.toggle('active', c.dataset.model === state.modelFilter)
   );
+  const searchEl = document.getElementById('search');
+  if (searchEl) searchEl.value = state.search;
+  _applyView(state.view);
+  document.getElementById('sidebar').classList.toggle('hidden', !state.sidebarVisible);
+  updateViewDropdownItems();
+  if (state.selectedId) {
+    document.querySelectorAll('.task-item').forEach(el =>
+      el.classList.toggle('selected', el.dataset.id === state.selectedId)
+    );
+  }
 }
-if (state.search) document.getElementById('search').value = state.search;
-if (state.view === 'chart') {
-  document.getElementById('task-list-container').style.display = 'none';
-  document.getElementById('detail').style.display = 'none';
-  document.getElementById('chart-container').classList.add('visible');
-}
-if (state.view === 'table') {
-  document.getElementById('detail').style.display = 'none';
-  document.getElementById('table-container').classList.add('visible');
-}
-if (!state.sidebarVisible) {
-  document.getElementById('sidebar').classList.add('hidden');
-}
-updateViewDropdownItems();
+
+// ── Boot ─────────────────────────────────────────────────────
+loadSavedState();
+applyStateToUI();
 
 // Close view dropdown on outside click
 document.addEventListener('click', e => {
@@ -3060,16 +3160,28 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) >= 5:
                 task_id = parts[3]
                 filename = parts[4]
-                messages = _build_transcript_messages(task_id, filename)
-                body = json.dumps(messages).encode('utf-8')
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    messages = _build_transcript_messages(task_id, filename)
+                    body = json.dumps(messages).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as exc:
+                    err = json.dumps({"error": str(exc), "task_id": task_id, "filename": filename}).encode('utf-8')
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
             else:
-                self.send_response(404)
+                err = json.dumps({"error": "Bad request", "path": path}).encode('utf-8')
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(err)))
                 self.end_headers()
+                self.wfile.write(err)
 
         elif path.startswith('/api/diff-stat/'):
             sha = path.split('/')[-1]
@@ -3114,6 +3226,7 @@ class Handler(BaseHTTPRequestHandler):
                 diff_text = result.stdout if result.returncode == 0 else f"git diff failed: {result.stderr}"
             except Exception as exc:
                 diff_text = f"Error running git diff: {exc}"
+            diff_text = diff_text.replace('\r\n', '\n').replace('\r', '\n')
             body = diff_text.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
