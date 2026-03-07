@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-from tl0.common import load_all_tasks, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at, task_updated_at, TRANSCRIPTS_FOLDER
+from tl0.common import load_all_tasks, task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at, task_updated_at, TRANSCRIPTS_FOLDER, TASKS_FOLDER, git_commit
 from tl0.config import load_config
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -121,12 +121,58 @@ body {
   gap: 7px;
   flex-shrink: 0;
 }
+#search-row { display: flex; gap: 6px; align-items: center; }
 #search {
-  width: 100%; padding: 7px 10px;
+  flex: 1; padding: 7px 10px;
   border: 1px solid var(--border); border-radius: 6px;
   font-size: 13px; outline: none; background: #fafbfc;
 }
 #search:focus { border-color: var(--accent); background: white; }
+#clear-filters {
+  display: none; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  border: 1px solid #3b82f6; background: #2563eb; color: white;
+  transition: all 0.1s;
+}
+#clear-filters:hover { background: #1d4ed8; border-color: #1d4ed8; }
+.no-results-clear-filters {
+  margin-top: 10px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid #3b82f6; background: #2563eb; color: white;
+  transition: all 0.1s;
+}
+.no-results-clear-filters:hover { background: #1d4ed8; border-color: #1d4ed8; }
+
+/* Column filter context menu */
+.col-filter-menu {
+  position: fixed; z-index: 9999; min-width: 180px;
+  background: white; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 4px 0;
+  font-size: 12px;
+}
+.col-filter-menu .cfm-header {
+  padding: 6px 12px; font-weight: 600; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.col-filter-menu .cfm-item {
+  padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+}
+.col-filter-menu .cfm-item:hover { background: #f3f4f6; }
+.col-filter-menu .cfm-item .cfm-op { font-weight: 600; width: 20px; text-align: center; color: var(--accent); }
+
+/* Active column filter pills */
+.table-filter-pills { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.table-filter-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;
+  background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; cursor: default;
+}
+.table-filter-pill .pill-x {
+  cursor: pointer; font-size: 13px; line-height: 1; color: #93c5fd;
+  margin-left: 2px;
+}
+.table-filter-pill .pill-x:hover { color: #dc2626; }
 
 /* Filter chips row */
 .chip-row { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -171,11 +217,6 @@ body {
 }
 .tag-chip:hover { border-color: #9ca3af; }
 .tag-chip.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
-#tag-clear {
-  font-size: 10px; color: var(--accent); cursor: pointer;
-  float: right; margin-top: -2px;
-}
-#tag-clear:hover { text-decoration: underline; }
 
 /* View toggle */
 #view-row {
@@ -215,10 +256,12 @@ body {
 .task-item[data-depth="4"] { padding-left: 58px; }
 
 .t-toggle {
-  width: 14px; min-width: 14px; height: 16px;
+  width: 24px; min-width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--text-muted); font-size: 9px; flex-shrink: 0; margin-top: 1px;
+  color: var(--text-muted); font-size: 14px; flex-shrink: 0; user-select: none;
+  transition: color 0.1s; cursor: pointer;
 }
+.t-toggle:hover { color: var(--text); }
 .t-dot {
   width: 7px; min-width: 7px; height: 7px; border-radius: 50%;
   margin-top: 4px; flex-shrink: 0;
@@ -246,28 +289,41 @@ body {
 .t-sub-count   { font-size: 10px; color: #9ca3af; }
 
 /* ── Detail panel ──────────────────────────────────────────── */
-#detail { flex: 1; overflow-y: auto; padding: 24px 28px; }
+#detail { flex: 1; overflow-y: auto; padding: 0 28px 24px 28px; }
 #empty-state {
   display: flex; flex-direction: column; align-items: center;
   justify-content: center; height: 100%; gap: 8px;
   color: var(--text-muted);
 }
-#empty-state .hint { font-size: 11px; color: #9ca3af; }
-
+.d-header {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg); padding: 24px 0 12px 0; margin: 0 0 14px 0;
+  border-bottom: 1px solid var(--border);
+}
 .d-title { font-size: 19px; font-weight: 600; line-height: 1.4; margin-bottom: 10px; }
-.d-badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.d-badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 0; }
 .d-badge {
   padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 500;
 }
 
 .d-section {
   background: white; border: 1px solid var(--border); border-radius: 8px;
-  padding: 15px 16px; margin-bottom: 14px;
+  padding: 0; margin-bottom: 14px; overflow: hidden;
 }
+.d-section.collapsed .d-section-body { display: none; }
+.d-section-body { padding: 0 16px 15px 16px; }
 .d-label {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 10px;
+  letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 0;
+  padding: 15px 16px; cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; user-select: none;
 }
+.d-label:hover { background: #f9fafb; }
+.d-label::after {
+  content: '▾'; font-size: 11px; color: #9ca3af; transition: transform 0.15s;
+}
+.d-section.collapsed .d-label::after { transform: rotate(-90deg); }
+.d-section.collapsed .d-label { margin-bottom: 0; }
 .d-pre {
   font-size: 13px; line-height: 1.65; color: var(--text);
   white-space: pre-wrap; font-family: inherit; word-break: break-word;
@@ -328,9 +384,8 @@ body {
   border-radius: 4px; margin-bottom: 3px; word-break: break-all;
 }
 .result-box {
-  background: #f0fdf4; border-left: 3px solid #4ade80;
-  padding: 12px; border-radius: 4px; font-size: 13px;
-  line-height: 1.65; color: #166534;
+  padding: 12px; font-size: 13px;
+  line-height: 1.65; color: var(--text);
 }
 .stuck-banner {
   background: #fff1f2; border-left: 3px solid #f87171;
@@ -405,10 +460,29 @@ body {
 .log-btn:hover { background: #4b5563; }
 
 /* ── Diff viewer ──────────────────────────────────────────── */
-.diff-line-add { background: #dcfce7; color: #166534; }
-.diff-line-del { background: #fee2e2; color: #991b1b; }
-.diff-line-hunk { color: #6366f1; font-weight: 600; }
-.diff-line-header { color: #9ca3af; font-weight: 600; }
+.diff2html-panel {
+  display: flex; flex-direction: column;
+  background: #ffffff; color: var(--text);
+}
+.diff2html-panel .log-panel-header {
+  border-bottom: 1px solid var(--border);
+}
+.diff2html-panel .log-panel-header h3 { color: var(--text); }
+.diff2html-panel .log-panel-close { color: var(--text-muted); }
+.diff2html-panel .log-panel-close:hover { background: #f3f4f6; color: var(--text); }
+.diff2html-panel .log-panel-body { padding: 0; overflow: auto; flex: 1; background: #ffffff; }
+/* Compact diff2html overrides */
+.d2h-wrapper { font-size: 12px; }
+.d2h-file-list-wrapper { padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.d2h-file-list { margin: 0; padding: 0; }
+.d2h-file-list li { padding: 1px 0; }
+.d2h-file-wrapper { margin: 0; border-radius: 0; border-left: none; border-right: none; border-bottom: 1px solid var(--border); }
+.d2h-file-header { padding: 4px 8px; }
+.d2h-code-line { padding: 0 6px; }
+.d2h-code-linenumber { padding: 0 6px; min-width: 32px; }
+.d2h-diff-tbody tr td { line-height: 1.4; padding-top: 0 !important; padding-bottom: 0 !important; }
+.d2h-code-line-ctn { line-height: 1.4; }
+.d2h-tag { padding: 1px 4px; font-size: 10px; }
 .sha-badge {
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px;
   background: #f3f4f6; border: 1px solid var(--border); border-radius: 4px;
@@ -486,6 +560,43 @@ body {
   margin-top: 4px; user-select: none;
 }
 .conv-tool-toggle:hover { text-decoration: underline; }
+.conv-thinking {
+  background: #fef9c3; border: 1px solid #fde68a; border-radius: 6px;
+  padding: 8px 10px; margin-top: 6px; font-size: 12px;
+}
+.conv-thinking-label {
+  font-size: 11px; font-weight: 600; color: #92400e;
+}
+.conv-thinking-preview {
+  font-weight: 400; color: #78716c; font-style: italic;
+}
+.conv-thinking-body {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: #374151;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 300px; overflow-y: auto;
+  background: #fffbeb; border-radius: 4px; padding: 6px 8px; margin-top: 4px;
+}
+.conv-user-full {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: #374151;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 300px; overflow-y: auto;
+  background: white; border-radius: 4px; padding: 6px 8px; margin-top: 4px;
+}
+.conv-user-preview { color: #6b7280; }
+.conv-tool-pair {
+  border: 1px solid var(--border); border-radius: 6px;
+  margin-top: 6px; overflow: hidden;
+}
+.conv-tool-pair .conv-tool-use {
+  border: none; border-radius: 0; margin-top: 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.conv-tool-result-inline {
+  border: none; border-radius: 0; margin-top: 0;
+  background: #f0fdf4;
+}
 .exec-invocation { cursor: pointer; transition: background 0.1s; }
 .exec-invocation:hover { background: #eef2ff; }
 
@@ -633,7 +744,39 @@ mark {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+/* ── Delete button ──────────────────────────────────────────── */
+.delete-task-btn {
+  padding: 3px 10px; border-radius: 5px; cursor: pointer;
+  background: #dc2626; border: 1px solid #b91c1c; color: white;
+  font-size: 11px; margin-left: auto; transition: background 0.1s;
+  flex-shrink: 0;
+}
+.delete-task-btn:hover { background: #b91c1c; }
+
+/* ── Delete confirmation modal ──────────────────────────────── */
+#delete-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+#delete-modal-box {
+  background: white; border-radius: 8px; padding: 20px 24px;
+  max-width: 440px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+#delete-modal-title { font-weight: 600; font-size: 15px; margin-bottom: 10px; color: var(--text); }
+#delete-modal-body { font-size: 13px; color: var(--text); margin-bottom: 16px; line-height: 1.5; }
+#delete-modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.modal-btn { padding: 5px 14px; border-radius: 5px; cursor: pointer; font-size: 12px; transition: all 0.1s; }
+.modal-btn-cancel { background: white; border: 1px solid var(--border); color: var(--text); }
+.modal-btn-cancel:hover { background: #f3f4f6; }
+.modal-btn-secondary { background: white; border: 1px solid #9ca3af; color: var(--text); }
+.modal-btn-secondary:hover { background: #f3f4f6; border-color: #6b7280; }
+.modal-btn-danger { background: #dc2626; border: 1px solid #b91c1c; color: white; }
+.modal-btn-danger:hover { background: #b91c1c; }
+#delete-modal-error { color: #dc2626; font-size: 12px; margin-top: 8px; }
 </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+<script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
 </head>
 <body>
 
@@ -646,8 +789,9 @@ mark {
   <div id="view-dropdown-wrap">
     <button id="view-dropdown-btn" onclick="toggleViewDropdown()">View ▾</button>
     <div id="view-dropdown-menu" style="display:none">
-      <button id="view-chart-item" onclick="setView(state.view === 'chart' ? 'tree' : 'chart'); closeViewDropdown()">Chart</button>
-      <button id="view-table-item" onclick="setView(state.view === 'table' ? 'tree' : 'table'); closeViewDropdown()">Table</button>
+      <button id="view-detail-item" onclick="setView('tree'); closeViewDropdown()">Detail</button>
+      <button id="view-chart-item" onclick="setView('chart'); closeViewDropdown()">Chart</button>
+      <button id="view-table-item" onclick="setView('table'); closeViewDropdown()">Table</button>
       <button id="view-sidebar-item" onclick="toggleSidebar(); closeViewDropdown()">Hide Sidebar</button>
     </div>
   </div>
@@ -657,7 +801,10 @@ mark {
 <div id="app">
   <aside id="sidebar">
     <div id="controls">
-      <input type="text" id="search" placeholder="Search title, description, ID… (press /)" autocomplete="off" spellcheck="false">
+      <div id="search-row">
+        <input type="text" id="search" placeholder="Search title, description, ID… (press /)" autocomplete="off" spellcheck="false">
+        <button id="clear-filters" onclick="clearAllFilters()">Clear Filters</button>
+      </div>
       <div class="chip-row" id="status-chips">
         <span class="chip active" data-status="all">All</span>
         <span class="chip" data-status="pending">Pending</span>
@@ -675,7 +822,6 @@ mark {
     </div>
 
     <div id="tag-section">
-      <span id="tag-clear" style="display:none" onclick="clearTags()">Clear tags</span>
     </div>
 
     <div id="view-row">
@@ -708,9 +854,19 @@ mark {
         <div id="col-picker-menu" style="display:none"></div>
       </div>
     </div>
+    <div id="table-filter-pills" class="table-filter-pills"></div>
     <div id="table-wrap">
       <table id="task-table"><thead><tr></tr></thead><tbody></tbody></table>
     </div>
+  </div>
+</div>
+
+<div id="delete-modal" style="display:none" onclick="closeDeleteModal(event)">
+  <div id="delete-modal-box">
+    <div id="delete-modal-title">Delete Task</div>
+    <div id="delete-modal-body"></div>
+    <div id="delete-modal-btns"></div>
+    <div id="delete-modal-error"></div>
   </div>
 </div>
 <div id="chart-tooltip"></div>
@@ -727,11 +883,12 @@ const state = {
   modelFilter:           'all',
   activeTags:            [],
   search:                '',
-  view:                  'tree',
+  view:                  'table',
   sidebarVisible:        true,
   expandedNodes:         new Set(),
   detailExpandedNodes:   new Set(),
   expandedTagCategories: new Set(),
+  tableFilters:          [],   // [{col, op, value, display}]
 };
 
 // ── Navigation history (← →) ─────────────────────────────────
@@ -781,6 +938,7 @@ function loadSavedState() {
     if (s.expandedNodes)         state.expandedNodes         = new Set(s.expandedNodes);
     if (s.detailExpandedNodes)   state.detailExpandedNodes   = new Set(s.detailExpandedNodes);
     if (s.expandedTagCategories) state.expandedTagCategories = new Set(s.expandedTagCategories);
+    if (Array.isArray(s.tableFilters)) state.tableFilters = s.tableFilters;
   } catch (_) {}
 }
 function persist() {
@@ -796,6 +954,7 @@ function persist() {
       expandedNodes:           [...state.expandedNodes],
       detailExpandedNodes:     [...state.detailExpandedNodes],
       expandedTagCategories:   [...state.expandedTagCategories],
+      tableFilters:            state.tableFilters,
     }));
   } catch (_) {}
 }
@@ -809,6 +968,7 @@ async function loadTasks() {
     taskMap   = Object.fromEntries(allTasks.map(t => [t.id, t]));
     updateStats();
     renderTagFilters();
+    updateClearFiltersButton();
     if (state.view === 'chart') renderChart();
     else if (state.view === 'table') renderTable();
     else renderTaskList();
@@ -844,6 +1004,74 @@ function schedulePoll() {
   if (hasActive) _pollTimer = setTimeout(loadTasks, 30000);
 }
 
+// ── Delete task ───────────────────────────────────────────────
+let _deleteTargetId = null;
+
+function confirmDelete(taskId) {
+  const task = taskMap[taskId];
+  if (!task) return;
+  _deleteTargetId = taskId;
+
+  const children = allTasks.filter(t => t.created_by === taskId);
+  const modal = document.getElementById('delete-modal');
+  const body  = document.getElementById('delete-modal-body');
+  const btns  = document.getElementById('delete-modal-btns');
+  const err   = document.getElementById('delete-modal-error');
+  err.textContent = '';
+
+  if (children.length === 0) {
+    body.textContent = `Delete task "${task.title}"? This cannot be undone.`;
+    btns.innerHTML = `
+      <button class="modal-btn modal-btn-cancel" onclick="closeDeleteModal()">Cancel</button>
+      <button class="modal-btn modal-btn-danger" onclick="executeDelete(false)">Delete</button>`;
+  } else {
+    body.innerHTML = `Task "<strong>${esc(task.title)}</strong>" has ${children.length} child task${children.length > 1 ? 's' : ''}. What would you like to do?`;
+    btns.innerHTML = `
+      <button class="modal-btn modal-btn-cancel" onclick="closeDeleteModal()">Cancel</button>
+      <button class="modal-btn modal-btn-secondary" onclick="executeDelete(false)">Delete task only</button>
+      <button class="modal-btn modal-btn-danger" onclick="executeDelete(true)">Delete task and children</button>`;
+  }
+
+  modal.style.display = 'flex';
+}
+
+function closeDeleteModal(event) {
+  if (event && event.target !== document.getElementById('delete-modal')) return;
+  document.getElementById('delete-modal').style.display = 'none';
+  _deleteTargetId = null;
+}
+
+async function executeDelete(includeChildren) {
+  if (!_deleteTargetId) return;
+  const taskId = _deleteTargetId;
+  const errEl = document.getElementById('delete-modal-error');
+  errEl.textContent = '';
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include_children: includeChildren }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      errEl.textContent = `Error: ${txt || res.status}`;
+      return;
+    }
+    document.getElementById('delete-modal').style.display = 'none';
+    _deleteTargetId = null;
+    // Clear selection if deleted task was selected
+    if (state.selectedId === taskId || includeChildren) {
+      state.selectedId = null;
+      document.getElementById('task-detail').style.display = 'none';
+      document.getElementById('empty-state').style.display = '';
+      persist();
+    }
+    await loadTasks();
+  } catch (e) {
+    errEl.textContent = `Error: ${e.message}`;
+  }
+}
+
 // ── Transcript cache & helpers ────────────────────────────────
 const _transcriptCache = {};
 async function fetchTranscript(taskId) {
@@ -866,31 +1094,62 @@ async function showInvocationDetail(taskId, filename) {
     overlay.className = 'log-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     let body = '';
+    let blockCounter = 0;
+    // Pre-index tool results by tool_use_id so we can render them inline
+    const toolResults = {};
     messages.forEach(msg => {
-      if (msg.role === 'assistant') {
+      if (msg.role === 'tool_result' && msg.tool_use_id) {
+        toolResults[msg.tool_use_id] = msg;
+      }
+    });
+    function renderToolResult(toolUseId) {
+      const r = toolResults[toolUseId];
+      if (!r) return '';
+      const resultId = 'tr-' + toolUseId;
+      let h = `<div class="conv-tool-result conv-tool-result-inline">`;
+      h += `<div class="conv-tool-result-body" id="${resultId}" style="display:none">${esc(r.text)}</div>`;
+      h += `<div class="conv-tool-toggle" onclick="toggleConvEl('${resultId}')">Show output</div>`;
+      h += `</div>`;
+      return h;
+    }
+    messages.forEach(msg => {
+      if (msg.role === 'user') {
+        body += `<div class="conv-msg user"><div class="conv-msg-role">User</div>`;
+        const userTextId = 'ut-' + (blockCounter++);
+        const preview = (msg.text || '').split('\\n')[0].substring(0, 120);
+        body += `<div class="conv-msg-text conv-user-preview">${esc(preview)}</div>`;
+        body += `<div class="conv-user-full" id="${userTextId}" style="display:none">${esc(msg.text)}</div>`;
+        body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${userTextId}')">Show full message</div>`;
+        body += `</div>`;
+      } else if (msg.role === 'assistant') {
         body += `<div class="conv-msg assistant"><div class="conv-msg-role">Assistant</div>`;
         (msg.content || []).forEach(block => {
-          if (block.type === 'text' && block.text) {
+          if (block.type === 'thinking' && block.thinking) {
+            const thinkId = 'th-' + (blockCounter++);
+            const preview = block.thinking.split('\\n')[0].substring(0, 100);
+            body += `<div class="conv-thinking">`;
+            body += `<div class="conv-thinking-label">Thinking: <span class="conv-thinking-preview">${esc(preview)}</span></div>`;
+            body += `<div class="conv-thinking-body" id="${thinkId}" style="display:none">${esc(block.thinking)}</div>`;
+            body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${thinkId}')">Show thinking</div>`;
+            body += `</div>`;
+          } else if (block.type === 'text' && block.text) {
             body += `<div class="conv-msg-text">${esc(block.text)}</div>`;
           } else if (block.type === 'tool_use') {
             const inputStr = JSON.stringify(block.input, null, 2);
             const inputId = 'ti-' + block.id;
+            body += `<div class="conv-tool-pair">`;
             body += `<div class="conv-tool-use">`;
             body += `<span class="conv-tool-name">${esc(block.name)}</span>`;
             body += `<div class="conv-tool-input" id="${inputId}" style="display:none">${esc(inputStr)}</div>`;
             body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${inputId}')">Show input</div>`;
             body += `</div>`;
+            body += renderToolResult(block.id);
+            body += `</div>`;
           }
         });
         body += `</div>`;
-      } else if (msg.role === 'tool_result') {
-        const resultId = 'tr-' + msg.tool_use_id;
-        body += `<div class="conv-tool-result">`;
-        body += `<div class="conv-tool-result-header">${esc(msg.tool_name || 'Tool Result')}</div>`;
-        body += `<div class="conv-tool-result-body" id="${resultId}" style="display:none">${esc(msg.text)}</div>`;
-        body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${resultId}')">Show output</div>`;
-        body += `</div>`;
       }
+      // tool_result messages are rendered inline above, skip standalone rendering
     });
     overlay.innerHTML = `<div class="conv-panel">
       <div class="conv-panel-header">
@@ -940,25 +1199,27 @@ async function showDiff(sha) {
     const res = await fetch('/api/diff/' + encodeURIComponent(sha));
     if (!res.ok) { alert('Failed to load diff'); return; }
     const text = await res.text();
+    const containerId = 'diff-container-' + sha;
     const overlay = document.createElement('div');
     overlay.className = 'log-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    // Syntax highlight diff lines
-    const highlighted = text.split('\n').map(line => {
-      if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-line-add">${esc(line)}</span>`;
-      if (line.startsWith('-') && !line.startsWith('---')) return `<span class="diff-line-del">${esc(line)}</span>`;
-      if (line.startsWith('@@')) return `<span class="diff-line-hunk">${esc(line)}</span>`;
-      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) return `<span class="diff-line-header">${esc(line)}</span>`;
-      return esc(line);
-    }).join('\n');
-    overlay.innerHTML = `<div class="log-panel" style="width:min(95vw,1100px);max-height:90vh">
+    overlay.innerHTML = `<div class="log-panel diff2html-panel" style="width:min(95vw,1400px);max-height:90vh">
       <div class="log-panel-header">
         <h3>Diff — ${esc(sha.slice(0,8))}</h3>
         <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
       </div>
-      <div class="log-panel-body">${highlighted}</div>
+      <div class="log-panel-body"><div id="${containerId}" class="d2h-wrapper"></div></div>
     </div>`;
     document.body.appendChild(overlay);
+    const target = document.getElementById(containerId);
+    new Diff2HtmlUI(target, text, {
+      drawFileList: true,
+      fileListToggle: true,
+      fileListStartVisible: true,
+      matching: 'lines',
+      outputFormat: 'line-by-line',
+      highlight: true,
+    }).draw();
   } catch (_) {}
 }
 
@@ -1059,11 +1320,7 @@ function renderTagFilters() {
   const groups  = getTagGroups();
   const section = document.getElementById('tag-section');
 
-  // Rebuild keeping the clear link
-  const clearEl = document.getElementById('tag-clear');
   section.innerHTML = '';
-  section.appendChild(clearEl);
-  clearEl.style.display = state.activeTags.length ? 'block' : 'none';
 
   Object.keys(groups).sort().forEach(cat => {
     const tags = Object.entries(groups[cat]).sort((a, b) => b[1] - a[1]);
@@ -1115,6 +1372,28 @@ function clearTags() {
   renderTaskList();
 }
 
+function hasActiveFilters() {
+  return state.statusFilter !== 'all' || state.modelFilter !== 'all' || state.activeTags.length > 0 || state.search.trim() !== '' || state.tableFilters.length > 0;
+}
+
+function updateClearFiltersButton() {
+  document.getElementById('clear-filters').style.display = hasActiveFilters() ? 'inline-block' : 'none';
+}
+
+function clearAllFilters() {
+  state.statusFilter = 'all';
+  state.modelFilter = 'all';
+  state.activeTags = [];
+  state.search = '';
+  state.tableFilters = [];
+  document.getElementById('search').value = '';
+  document.querySelectorAll('#status-chips .chip').forEach(c => c.classList.toggle('active', c.dataset.status === 'all'));
+  document.querySelectorAll('#model-chips .chip').forEach(c => c.classList.toggle('active', c.dataset.model === 'all'));
+  persist();
+  renderTagFilters();
+  renderTaskList();
+}
+
 // ── Filtering ────────────────────────────────────────────────
 function getFiltered() {
   const q = state.search.toLowerCase().trim();
@@ -1139,18 +1418,24 @@ function setView(v) {
   persist();
   const isChart = v === 'chart';
   const isTable = v === 'table';
-  document.getElementById('task-list-container').style.display = (isChart || isTable) ? 'none' : '';
-  document.getElementById('detail').style.display = (isChart || isTable) ? 'none' : '';
-  document.getElementById('chart-container').classList.toggle('visible', isChart);
+  // Keep task list visible in chart and table modes alongside the main view
+  document.getElementById('task-list-container').style.display = '';
+  // In chart mode: show detail only when a task is selected, otherwise show chart
+  const chartShowsDetail = isChart && !!state.selectedId;
+  document.getElementById('detail').style.display = isTable ? 'none' : (isChart && !state.selectedId ? 'none' : '');
+  document.getElementById('chart-container').classList.toggle('visible', isChart && !chartShowsDetail);
   document.getElementById('table-container').classList.toggle('visible', isTable);
   updateViewDropdownItems();
-  if (isChart) renderChart();
+  if (isChart && !state.selectedId) renderChart();
   else if (isTable) renderTable();
   else renderTaskList();
 }
 function updateViewDropdownItems() {
   const isChart = state.view === 'chart';
   const isTable = state.view === 'table';
+  const isDetail = state.view === 'tree';
+  const detailItem = document.getElementById('view-detail-item');
+  if (detailItem) detailItem.classList.toggle('active', isDetail);
   const chartItem = document.getElementById('view-chart-item');
   if (chartItem) chartItem.classList.toggle('active', isChart);
   const tableItem = document.getElementById('view-table-item');
@@ -1182,15 +1467,17 @@ function toggleTableMode() {
 }
 
 function renderTaskList() {
-  if (state.view === 'chart') { renderChart(); return; }
+  updateClearFiltersButton();
   if (state.view === 'table') { renderTable(); return; }
+  if (state.view === 'chart' && !state.selectedId) renderChart();
   const filtered   = getFiltered();
   const container  = document.getElementById('task-list');
   container.innerHTML = '';
   document.getElementById('result-count').textContent = `${filtered.length} tasks`;
 
   if (filtered.length === 0) {
-    container.innerHTML = '<div class="no-results">No tasks match the current filters.</div>';
+    const clearBtn = hasActiveFilters() ? '<br><button class="no-results-clear-filters" onclick="clearAllFilters()">Clear Filters</button>' : '';
+    container.innerHTML = `<div class="no-results">No tasks match the current filters.${clearBtn}</div>`;
     return;
   }
 
@@ -1242,7 +1529,7 @@ function renderItem(task, container, depth, hasChildren) {
   const toggle = document.createElement('div');
   toggle.className = 't-toggle';
   if (hasChildren) {
-    toggle.textContent = state.expandedNodes.has(task.id) ? '▾' : '▸';
+    toggle.textContent = state.expandedNodes.has(task.id) ? '▼' : '▶';
     toggle.onclick = e => {
       e.stopPropagation();
       if (state.expandedNodes.has(task.id)) state.expandedNodes.delete(task.id);
@@ -1314,7 +1601,10 @@ function renderItem(task, container, depth, hasChildren) {
   el.appendChild(toggle);
   el.appendChild(dot);
   el.appendChild(body);
-  el.onclick = () => selectTask(task.id);
+  el.onclick = () => {
+    if (state.view === 'chart' && state.selectedId === task.id) deselectTask();
+    else selectTask(task.id);
+  };
   container.appendChild(el);
 }
 
@@ -1336,9 +1626,24 @@ function _activateTask(id) {
   document.querySelectorAll('.task-item').forEach(el =>
     el.classList.toggle('selected', el.dataset.id === id)
   );
+  if (state.view === 'chart') {
+    // In chart mode: hide graph and show detail panel when a task is selected
+    document.getElementById('chart-container').classList.remove('visible');
+    document.getElementById('detail').style.display = '';
+  }
   renderDetail(id);
   const el = document.querySelector(`.task-item[data-id="${id}"]`);
   if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function deselectTask() {
+  state.selectedId = null;
+  persist();
+  document.querySelectorAll('.task-item').forEach(el => el.classList.remove('selected'));
+  if (state.view === 'chart') {
+    document.getElementById('chart-container').classList.add('visible');
+    document.getElementById('detail').style.display = 'none';
+    renderChart();
+  }
 }
 
 // Count all descendants (recursively) under taskId, excluding the node itself.
@@ -1431,6 +1736,48 @@ function renderSubtaskTree(taskId, depth) {
   return html;
 }
 
+function getAncestorChain(taskId) {
+  // Returns array from root ancestor down to (but NOT including) taskId.
+  // Each entry is {type:'human'} or {type:'task', task: taskObj}.
+  const chain = [];
+  const seen = new Set();
+  let current = taskMap[taskId];
+  if (!current) return chain;
+  seen.add(current.id);
+  let src = current.source;
+  while (src && src !== 'human' && taskMap[src] && !seen.has(src)) {
+    seen.add(src);
+    chain.unshift({ type: 'task', task: taskMap[src] });
+    src = taskMap[src].source;
+  }
+  // Prepend human root if the chain traces back to human input
+  if (!src || src === 'human') {
+    chain.unshift({ type: 'human' });
+  }
+  return chain;
+}
+
+function renderLineageRow(type, task, depth, isSelected) {
+  const indent = depth * 22;
+  if (type === 'human') {
+    return `<div class="d-tree-row" style="padding-left:${indent}px">
+      <span class="d-tree-toggle leaf" style="color:var(--text-muted)">⌨</span>
+      <span class="d-tree-cell" style="cursor:default;color:var(--text-muted);font-size:12px">human input</span>
+    </div>`;
+  }
+  const label = task.title.length > 80 ? task.title.slice(0, 80) + '…' : task.title;
+  const bold = isSelected ? 'font-weight:600;' : '';
+  const click = isSelected ? '' : `onclick="selectTask('${task.id}')"`;
+  const cellStyle = isSelected ? 'cursor:default;color:var(--text);pointer-events:none;' : '';
+  return `<div class="d-tree-row" style="padding-left:${indent}px;${bold}">
+    <span class="d-tree-toggle leaf">•</span>
+    <div class="d-tree-cell" ${click} style="${cellStyle}">
+      <span class="t-dot ${statusClass(task.status)}" style="width:8px;height:8px;border-radius:50%;flex-shrink:0"></span>
+      <span class="d-tree-cell-text">${esc(label)}</span>
+    </div>
+  </div>`;
+}
+
 function renderDetail(id) {
   const task = taskMap[id];
   if (!task) return;
@@ -1448,154 +1795,132 @@ function renderDetail(id) {
 
   let html = '';
 
-  // Header
+  // Sticky header
+  html += `<div class="d-header">`;
   html += `<div class="d-title">${esc(task.title)}</div>`;
   html += `<div class="d-badges">`;
   html += `<span class="d-badge" style="background:${sbg};color:${sfg}">${task.status}</span>`;
   html += `<span class="d-badge badge-${task.model}">${task.model}</span>`;
   if (task.thinking) html += `<span class="d-badge badge-think">🧠 extended thinking</span>`;
+  (task.tags || []).forEach(tag => {
+    html += `<span class="d-badge" style="cursor:pointer" onclick="jumpToTag('${escAttr(tag)}')" title="Filter by this tag">${esc(tag)}</span>`;
+  });
   html += `<span style="font-size:11px;color:var(--text-muted);font-family:monospace">${task.id}</span>`;
+  html += `<button class="delete-task-btn" onclick="confirmDelete('${escAttr(task.id)}')">Delete</button>`;
   html += `</div>`;
 
-  // Stuck banner
   if (task.status === 'stuck') {
-    html += `<div class="stuck-banner">⚠️ This task is stuck. A resolution task should be created.</div>`;
+    html += `<div class="stuck-banner" style="margin-top:10px">⚠️ This task is stuck. A resolution task should be created.</div>`;
   }
-
-  // Open blockers banner
   if (openBlockers.length > 0) {
-    html += `<div class="stuck-banner" style="background:#fff7ed;border-color:#fb923c;color:#c2410c">⛔ Blocked by ${openBlockers.length} unfinished task${openBlockers.length > 1 ? 's' : ''}.</div>`;
+    html += `<div class="stuck-banner" style="margin-top:10px;background:#fff7ed;border-color:#fb923c;color:#c2410c">⛔ Blocked by ${openBlockers.length} unfinished task${openBlockers.length > 1 ? 's' : ''}.</div>`;
   }
+  html += `</div>`;
 
   // Description
   html += `<div class="d-section">
-    <div class="d-label">Description</div>
-    <pre class="d-pre">${highlightText(task.description, state.search.trim())}</pre>
+    <div class="d-label" onclick="toggleSection(this)">Description</div>
+    <div class="d-section-body"><pre class="d-pre">${highlightText(task.description, state.search.trim())}</pre></div>
   </div>`;
-
-  // Event timeline
-  if (task.events && task.events.length) {
-    html += `<div class="d-section"><div class="d-label">Events</div>`;
-    html += renderEventTimeline(task.events);
-    html += `</div>`;
-  }
 
   // Execution summary (loaded async)
   html += `<div id="exec-section-${task.id.slice(0,8)}"></div>`;
   if (task.status === 'claimed' || task.status === 'done') {
+    const taskEvents = task.events && task.events.length ? task.events : null;
     fetchTranscript(task.id).then(tx => {
       const el = document.getElementById('exec-section-' + task.id.slice(0,8));
       if (!el || !tx || !tx.has_transcript) return;
-      let s = '<div class="d-section"><div class="d-label" style="display:flex;align-items:center;justify-content:space-between">Execution';
-      if (tx.has_loop_log) s += ` <button class="log-btn" onclick="showLoopLog('${task.id}')">View Loop Log</button>`;
+      let s = '<div class="d-section"><div class="d-label" onclick="toggleSection(this)" style="display:flex;align-items:center;justify-content:space-between"><span>Execution</span>';
+      if (tx.has_loop_log) s += ` <button class="log-btn" onclick="event.stopPropagation();showLoopLog(\'${task.id}\')">View Loop Log</button>`;
       s += '</div>';
+      s += '<div class="d-section-body">';
+      if (taskEvents) s += renderEventTimeline(taskEvents);
       s += renderExecSection(tx, task.id);
-      s += '</div>';
+      s += '</div></div>';
       el.innerHTML = s;
     });
   }
 
-  // Tags
-  if ((task.tags || []).length) {
-    html += `<div class="d-section"><div class="d-label">Tags</div><div class="d-tags">`;
-    task.tags.forEach(tag => {
-      html += `<span class="d-tag" onclick="jumpToTag('${escAttr(tag)}')" title="Filter by this tag">${esc(tag)}</span>`;
-    });
-    html += `</div></div>`;
-  }
-
-  // Result
-  if (task.result) {
-    html += `<div class="d-section"><div class="d-label">Result</div><div class="result-box">${esc(task.result)}</div></div>`;
-  }
-
-  // Commit (merge SHA)
-  if (task.merge_sha) {
-    const shortSha = task.merge_sha.slice(0, 8);
-    html += `<div class="d-section"><div class="d-label">Commit</div><div style="display:flex;align-items:center;gap:8px">`;
-    html += `<span class="sha-badge" onclick="showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
-    if (window.__GITHUB_REPO_URL__) {
-      html += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
-    }
-    html += `</div></div>`;
-  }
-
-  // Source chain (progenitor trace)
-  const sourceChain = getSourceChain(task.id);
-  if (sourceChain.length > 0) {
-    html += `<div class="d-section"><div class="d-label">Source Chain</div>`;
-    // Show current task's immediate source
-    const src = task.source;
-    if (src === 'human') {
-      html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">⌨ Created by human input</div>`;
-    } else if (src && taskMap[src]) {
-      html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Created by task execution:</div>`;
-    }
-    // Show the full ancestry chain
-    sourceChain.forEach((entry, i) => {
-      const indent = i * 16;
-      const arrow = i > 0 ? '↳ ' : '';
-      if (entry.type === 'human') {
-        html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0">
-          ${arrow}<span style="color:var(--text-muted)">⌨ human input</span>
-        </div>`;
-      } else if (entry.task) {
-        const t = entry.task;
-        const isCurrent = t.id === task.id;
-        if (isCurrent) {
-          html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0;font-weight:600">
-            ${arrow}<span class="t-dot ${statusClass(t.status)}" style="width:7px;height:7px;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:4px"></span>
-            ${esc(t.title.length > 60 ? t.title.slice(0, 60) + '…' : t.title)}
-            <span style="font-weight:400;color:var(--text-muted);font-family:monospace;font-size:10px">${t.id.slice(0,8)}</span>
-          </div>`;
-        } else {
-          html += `<div style="padding-left:${indent}px;font-size:12px;margin:3px 0">
-            ${arrow}<span class="task-link" onclick="selectTask('${t.id}')" style="display:inline-flex;margin:0;padding:3px 8px">
-              <span class="t-dot ${statusClass(t.status)}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0"></span>
-              ${esc(t.title.length > 60 ? t.title.slice(0, 60) + '…' : t.title)}
-            </span>
-          </div>`;
-        }
+  // Result + Commit
+  if (task.result || task.merge_sha) {
+    html += `<div class="d-section"><div class="d-label" onclick="toggleSection(this)">Result</div>`;
+    html += `<div class="d-section-body">`;
+    if (task.result) html += `<div class="result-box">${esc(task.result)}</div>`;
+    if (task.merge_sha) {
+      const shortSha = task.merge_sha.slice(0, 8);
+      const shaMargin = task.result ? 'margin-top:8px' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;${shaMargin}">`;
+      html += `<span class="sha-badge" onclick="event.stopPropagation();showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
+      if (window.__GITHUB_REPO_URL__) {
+        html += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
       }
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Task Lineage (unified: ancestors → current → children)
+  const ancestors = getAncestorChain(task.id);
+  const hasChildren = (task.tasks_created || []).length > 0;
+  if (ancestors.length > 0 || hasChildren) {
+    let lineageLabel = 'Task Lineage';
+    if (hasChildren) {
+      const subs     = task.tasks_created.map(id => taskMap[id]).filter(Boolean);
+      const byStatus = {};
+      subs.forEach(t => byStatus[t.status] = (byStatus[t.status]||0)+1);
+      const summary  = Object.entries(byStatus).map(([s,c]) => `${c} ${s}`).join(', ');
+      lineageLabel += ` · ${subs.length} subtask${subs.length !== 1 ? 's' : ''} (${summary})`;
+    }
+    html += `<div class="d-section"><div class="d-label" onclick="toggleSection(this)">${lineageLabel}</div>`;
+    html += `<div class="d-section-body">`;
+
+    ancestors.forEach((entry, i) => {
+      html += renderLineageRow(entry.type, entry.type === 'task' ? entry.task : null, i, false);
     });
-    html += `</div>`;
+
+    const currentDepth = ancestors.length;
+    html += renderLineageRow('task', task, currentDepth, true);
+
+    if (hasChildren) {
+      topoSort(task.tasks_created.slice()).forEach(id => {
+        html += renderSubtaskTree(id, currentDepth + 1);
+      });
+    }
+
+    html += `</div></div>`;
   }
 
-  // Parent task
-  if (task.parent_task) {
-    html += `<div class="d-section"><div class="d-label">Parent Task</div>${taskLink(task.parent_task)}</div>`;
-  }
-
-  // Subtasks
-  if ((task.tasks_created || []).length) {
-    const subs     = task.tasks_created.map(id => taskMap[id]).filter(Boolean);
-    const byStatus = {};
-    subs.forEach(t => byStatus[t.status] = (byStatus[t.status]||0)+1);
-    const summary  = Object.entries(byStatus).map(([s,c]) => `${c} ${s}`).join(', ');
-    html += `<div class="d-section"><div class="d-label">Subtasks (${subs.length} direct · ${summary})</div>`;
-    topoSort(task.tasks_created.slice()).forEach(id => { html += renderSubtaskTree(id, 0); });
-    html += `</div>`;
-  }
-
-  // Blocked by
-  if ((task.blocked_by || []).length) {
-    html += `<div class="d-section"><div class="d-label">Blocked By (${task.blocked_by.length})</div>`;
-    task.blocked_by.forEach(id => { html += taskLink(id); });
-    html += `</div>`;
-  }
-
-  // Blocking (tasks that list this task in their blocked_by)
+  // Blocked by & Blocking – side-by-side
+  const blockedBy = (task.blocked_by || []);
   const blocking = Object.values(taskMap).filter(t => (t.blocked_by || []).includes(task.id));
-  if (blocking.length) {
-    const allDone = blocking.every(t => t.status === 'done');
-    const label = allDone ? 'Blocked (all done)' : 'Blocking';
-    html += `<div class="d-section"><div class="d-label">${label} (${blocking.length})</div>`;
-    blocking.forEach(t => { html += taskLink(t.id); });
+  if (blockedBy.length || blocking.length) {
+    html += `<div style="display:flex;gap:8px;margin-bottom:0">`;
+    // Blocked By column
+    html += `<div class="d-section" style="flex:1;min-width:0">`;
+    html += `<div class="d-label" onclick="toggleSection(this)">Blocked By (${blockedBy.length})</div>`;
+    html += `<div class="d-section-body">`;
+    if (blockedBy.length) { blockedBy.forEach(id => { html += taskLink(id); }); }
+    else { html += `<span style="color:#9ca3af;font-size:12px">None</span>`; }
+    html += `</div></div>`;
+    // Blocking column
+    const allDone = blocking.length && blocking.every(t => t.status === 'done');
+    const blockingLabel = allDone ? 'Blocked (all done)' : 'Blocking';
+    html += `<div class="d-section" style="flex:1;min-width:0">`;
+    html += `<div class="d-label" onclick="toggleSection(this)">${blockingLabel} (${blocking.length})</div>`;
+    html += `<div class="d-section-body">`;
+    if (blocking.length) { blocking.forEach(t => { html += taskLink(t.id); }); }
+    else { html += `<span style="color:#9ca3af;font-size:12px">None</span>`; }
+    html += `</div></div>`;
     html += `</div>`;
   }
 
   panel.innerHTML = html;
   panel.scrollTop = 0;
+}
+
+// ── Section collapse ─────────────────────────────────────────
+function toggleSection(labelEl) {
+  labelEl.parentElement.classList.toggle('collapsed');
 }
 
 // ── Link helpers ─────────────────────────────────────────────
@@ -1665,25 +1990,6 @@ function getMatchSnippet(task, query) {
 // ── Source chain (progenitor trace) ──────────────────────────
 // Returns an array from root (human) to the given task, e.g.:
 // [ {type:'human'}, {type:'task',task:T1}, {type:'task',task:T2}, {type:'task',task:current} ]
-function getSourceChain(taskId) {
-  const chain = [];
-  const seen = new Set();
-  let current = taskMap[taskId];
-  while (current) {
-    if (seen.has(current.id)) break;
-    seen.add(current.id);
-    chain.unshift({ type: 'task', task: current });
-    const src = current.source;
-    if (!src || src === 'human') {
-      chain.unshift({ type: 'human' });
-      break;
-    }
-    if (!taskMap[src]) break; // source task not found, stop
-    current = taskMap[src];
-  }
-  return chain;
-}
-
 // Build source-based tree: tasks grouped by what created them.
 // Returns { roots: [...taskIds], childrenOf: { sourceId -> [...taskIds] } }
 function buildSourceTree() {
@@ -1984,6 +2290,7 @@ const TABLE_COLUMNS = [
   { key: 'Task',             label: 'Task (subtask)',  type: 'tool',   default: false },
   { key: 'WebFetch',         label: 'WebFetch',        type: 'tool',   default: false },
   { key: 'other_tools',      label: 'Other Tools',     type: 'num',    default: false },
+  { key: 'commit',           label: 'Commit',          type: 'commit', default: true },
   { key: 'completed_at',     label: 'Completed',       type: 'time',   default: true },
   { key: 'tags',             label: 'Tags',            type: 'tags',   default: false },
 ];
@@ -2015,6 +2322,7 @@ function _getTableVal(task, ts, col) {
     }
     case 'tool_errors':     return ts ? (ts.total_tool_errors || 0) : 0;
     case 'merge_conflicts': return ts ? (ts.merge_conflict_count || 0) : 0;
+    case 'commit':          return task.merge_sha || '';
     case 'completed_at':    return task.completed_at || '';
     case 'tags':            return (task.tags || []).join(', ');
     case 'other_tools': {
@@ -2071,32 +2379,46 @@ function _fmtRelTime(iso) {
 
 function _fmtCell(task, ts, col) {
   const val = _getTableVal(task, ts, col);
+  // data attributes for filter context menu
+  const fAttr = `data-filter-col="${col.key}" data-filter-task="${task.id}"`;
   switch (col.key) {
     case 'title':
       return `<td class="task-name-cell" onclick="tableClickTask('${task.id}')" title="${(task.title||'').replace(/"/g,'&quot;')}">${_esc(task.title || '(untitled)')}</td>`;
     case 'status': {
       const cls = val === 'in-progress' ? 'in-progress' : val;
-      return `<td><span class="badge badge-${cls}" style="${_statusBadgeStyle(val)}">${val}</span></td>`;
+      return `<td ${fAttr} style="cursor:pointer"><span class="badge badge-${cls}" style="${_statusBadgeStyle(val)}">${val}</span></td>`;
     }
     case 'model':
-      return val ? `<td><span class="badge badge-${val}">${val}</span></td>` : '<td>—</td>';
+      return val ? `<td ${fAttr} style="cursor:pointer"><span class="badge badge-${val}">${val}</span></td>` : `<td ${fAttr} style="cursor:pointer">—</td>`;
     case 'duration':
-      return `<td class="num-cell">${_fmtDuration(val)}</td>`;
+      return `<td class="num-cell" ${fAttr} style="cursor:pointer">${_fmtDuration(val)}</td>`;
     case 'cost':
-      return `<td class="num-cell">${_fmtCost(val)}</td>`;
+      return `<td class="num-cell" ${fAttr} style="cursor:pointer">${_fmtCost(val)}</td>`;
     case 'completed_at':
-      return `<td title="${val}">${_fmtRelTime(val)}</td>`;
+      return `<td ${fAttr} style="cursor:pointer" title="${val}">${_fmtRelTime(val)}</td>`;
     case 'tags':
       return `<td>${(task.tags||[]).map(t => `<span class="d-tag" onclick="event.stopPropagation(); toggleTag('${_esc(t)}')">${_esc(t)}</span>`).join(' ')}</td>`;
+    case 'commit': {
+      if (!val) return `<td class="num-cell" style="color:#d1d5db">—</td>`;
+      const short = val.slice(0, 8);
+      const cellId = 'ds-' + short;
+      fetch('/api/diff-stat/' + encodeURIComponent(val))
+        .then(r => r.json())
+        .then(d => {
+          const el = document.getElementById(cellId);
+          if (el) el.textContent = d.files != null ? d.files + ' file' + (d.files !== 1 ? 's' : '') : short;
+        }).catch(() => {});
+      return `<td class="num-cell"><span id="${cellId}" class="sha-badge" onclick="event.stopPropagation();showDiff('${_esc(val)}')" title="View diff" style="cursor:pointer">${short}</span></td>`;
+    }
     case 'merge_conflicts':
-      if (val > 0) return `<td class="num-cell merge-yes">${val}</td>`;
-      return `<td class="num-cell merge-no">—</td>`;
+      if (val > 0) return `<td class="num-cell merge-yes" ${fAttr} style="cursor:pointer">${val}</td>`;
+      return `<td class="num-cell merge-no" ${fAttr} style="cursor:pointer">—</td>`;
     case 'tool_errors':
-      if (val > 0) return `<td class="num-cell" style="color:#dc2626;font-weight:600">${val}</td>`;
-      return `<td class="num-cell" style="color:#9ca3af">—</td>`;
+      if (val > 0) return `<td class="num-cell" ${fAttr} style="cursor:pointer;color:#dc2626;font-weight:600">${val}</td>`;
+      return `<td class="num-cell" ${fAttr} style="cursor:pointer;color:#9ca3af">—</td>`;
     default:
       // Numeric (tool counts, turns, etc.)
-      return val ? `<td class="num-cell">${val}</td>` : `<td class="num-cell" style="color:#d1d5db">0</td>`;
+      return val ? `<td class="num-cell" ${fAttr} style="cursor:pointer">${val}</td>` : `<td class="num-cell" ${fAttr} style="cursor:pointer;color:#d1d5db">0</td>`;
   }
 }
 
@@ -2133,13 +2455,19 @@ async function renderTable() {
   const filtered = getFiltered();
   const visCols = TABLE_COLUMNS.filter(c => _visibleCols.has(c.key));
 
-  document.getElementById('table-result-count').textContent = `${filtered.length} tasks`;
-
   // Build rows with sort values
   let rows = filtered.map(task => {
     const ts = _allTranscripts[task.id] || null;
     return { task, ts, _sortVals: {} };
   });
+
+  // Apply column filters
+  rows = _applyTableFilters(rows);
+
+  document.getElementById('table-result-count').textContent = `${rows.length} tasks`;
+
+  // Render filter pills
+  _renderTableFilterPills();
 
   // Sort
   if (_tableSort.col) {
@@ -2167,6 +2495,19 @@ async function renderTable() {
   tbody.innerHTML = rows.map(({task, ts}) =>
     '<tr>' + visCols.map(col => _fmtCell(task, ts, col)).join('') + '</tr>'
   ).join('');
+
+  // Attach filter click delegation on tbody
+  tbody.onclick = function(e) {
+    const td = e.target.closest('td[data-filter-col]');
+    if (!td) return;
+    const colKey = td.dataset.filterCol;
+    const taskId = td.dataset.filterTask;
+    const col = TABLE_COLUMNS.find(c => c.key === colKey);
+    const task = taskMap[taskId];
+    if (!col || !task) return;
+    const ts = _allTranscripts ? (_allTranscripts[taskId] || null) : null;
+    _showColFilterMenu(e, task, ts, col);
+  };
 
   // Render column picker
   renderColPicker();
@@ -2198,6 +2539,109 @@ function renderColPicker() {
   menu.innerHTML = TABLE_COLUMNS.map(col => {
     const checked = _visibleCols.has(col.key) ? 'checked' : '';
     return `<label><input type="checkbox" ${checked} onchange="toggleCol('${col.key}', this.checked)"> ${col.label}</label>`;
+  }).join('');
+}
+
+// ── Column Filters ──────────────────────────────────────────
+
+const _OP_LABELS = { lte: '\u2264', eq: '=', gte: '\u2265', neq: '\u2260' };
+const _OP_NAMES  = { lte: 'Less or equal', eq: 'Equal', gte: 'Greater or equal', neq: 'Not equal' };
+
+function _formatFilterDisplay(col, val) {
+  if (col.key === 'duration') return _fmtDuration(val);
+  if (col.key === 'cost') return _fmtCost(val);
+  if (col.key === 'completed_at') return _fmtRelTime(val);
+  return String(val);
+}
+
+function _showColFilterMenu(e, task, ts, col) {
+  e.stopPropagation();
+  _closeColFilterMenu();
+  const rawVal = _getTableVal(task, ts, col);
+  const display = _formatFilterDisplay(col, rawVal);
+
+  const menu = document.createElement('div');
+  menu.className = 'col-filter-menu';
+  menu.id = 'col-filter-menu';
+  // Store value on menu element to avoid HTML attribute quoting issues
+  const items = Object.entries(_OP_LABELS).map(([op, sym]) =>
+    `<div class="cfm-item" data-op="${op}">` +
+    `<span class="cfm-op">${sym}</span> ${_OP_NAMES[op]}</div>`
+  ).join('');
+  menu.innerHTML = `<div class="cfm-header">${_esc(col.label)}: ${_esc(display)}</div>` + items;
+  menu._filterCol = col.key;
+  menu._filterVal = rawVal;
+  menu.querySelectorAll('.cfm-item').forEach(item => {
+    item.addEventListener('click', () => _addColFilter(menu._filterCol, item.dataset.op, menu._filterVal));
+  });
+
+  document.body.appendChild(menu);
+
+  // Position near click, clamped to viewport
+  const rect = menu.getBoundingClientRect();
+  let x = e.clientX, y = e.clientY + 4;
+  if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 8;
+  if (y + rect.height > window.innerHeight) y = e.clientY - rect.height - 4;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  // Close on outside click
+  setTimeout(() => document.addEventListener('click', _closeColFilterMenu, { once: true }), 0);
+}
+
+function _closeColFilterMenu() {
+  const m = document.getElementById('col-filter-menu');
+  if (m) m.remove();
+}
+
+function _addColFilter(colKey, op, value) {
+  _closeColFilterMenu();
+  const col = TABLE_COLUMNS.find(c => c.key === colKey);
+  if (!col) return;
+  // Remove existing filter on same col+op to replace it
+  state.tableFilters = state.tableFilters.filter(f => !(f.col === colKey && f.op === op));
+  state.tableFilters.push({ col: colKey, op, value, display: _formatFilterDisplay(col, value) });
+  persist();
+  updateClearFiltersButton();
+  renderTable();
+}
+
+function _removeColFilter(idx) {
+  state.tableFilters.splice(idx, 1);
+  persist();
+  updateClearFiltersButton();
+  renderTable();
+}
+
+function _applyTableFilters(rows) {
+  if (!state.tableFilters.length) return rows;
+  return rows.filter(({task, ts}) => {
+    for (const f of state.tableFilters) {
+      const col = TABLE_COLUMNS.find(c => c.key === f.col);
+      if (!col) continue;
+      const val = _getTableVal(task, ts, col);
+      const cmp = typeof val === 'number' && typeof f.value === 'number'
+        ? val - f.value
+        : String(val).localeCompare(String(f.value));
+      switch (f.op) {
+        case 'lte': if (cmp > 0) return false; break;
+        case 'eq':  if (cmp !== 0) return false; break;
+        case 'gte': if (cmp < 0) return false; break;
+        case 'neq': if (cmp === 0) return false; break;
+      }
+    }
+    return true;
+  });
+}
+
+function _renderTableFilterPills() {
+  const container = document.getElementById('table-filter-pills');
+  if (!container) return;
+  if (!state.tableFilters.length) { container.innerHTML = ''; return; }
+  container.innerHTML = state.tableFilters.map((f, i) => {
+    const col = TABLE_COLUMNS.find(c => c.key === f.col);
+    const label = col ? col.label : f.col;
+    return `<span class="table-filter-pill">${_esc(label)} ${_OP_LABELS[f.op]} ${_esc(f.display)}<span class="pill-x" onclick="_removeColFilter(${i})">&times;</span></span>`;
   }).join('');
 }
 
@@ -2286,7 +2730,6 @@ if (state.view === 'chart') {
   document.getElementById('chart-container').classList.add('visible');
 }
 if (state.view === 'table') {
-  document.getElementById('task-list-container').style.display = 'none';
   document.getElementById('detail').style.display = 'none';
   document.getElementById('table-container').classList.add('visible');
 }
@@ -2378,8 +2821,28 @@ def _build_transcript_messages(task_id: str, filename: str) -> list:
         elif e.get("type") == "user":
             msg = e.get("message", {})
             content = msg.get("content", [])
+            # Handle string content (the original user prompt/command)
+            if isinstance(content, str):
+                if content.strip():
+                    messages.append({"role": "user", "text": content})
+                continue
             if not isinstance(content, list):
                 continue
+            # Check if this user message has text blocks (prompt) vs tool_result blocks
+            has_text = any(
+                isinstance(b, dict) and b.get("type") == "text"
+                for b in content
+            )
+            if has_text:
+                text_parts = []
+                for block in content:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                combined = "\n".join(text_parts)
+                if combined.strip():
+                    messages.append({"role": "user", "text": combined})
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     tool_use_id = block.get("tool_use_id", "")
@@ -2608,6 +3071,26 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
 
+        elif path.startswith('/api/diff-stat/'):
+            sha = path.split('/')[-1]
+            if not re.fullmatch(r'[0-9a-fA-F]{6,40}', sha):
+                self.send_response(400)
+                self.end_headers()
+                return
+            if not self.code_repo:
+                self._respond_json({'files': 0})
+                return
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', '--numstat', f'{sha}~1..{sha}'],
+                    cwd=self.code_repo,
+                    capture_output=True, text=True, timeout=10,
+                )
+                files = len([l for l in result.stdout.splitlines() if l.strip()]) if result.returncode == 0 else 0
+            except Exception:
+                files = 0
+            self._respond_json({'files': files})
+
         elif path.startswith('/api/diff/'):
             sha = path.split('/')[-1]
             # Validate SHA is hex only (prevent command injection)
@@ -2641,6 +3124,98 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _respond_json(self, data):
+        body = json.dumps(data).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+
+        # POST /api/tasks/<id>/delete  — body: {"include_children": bool}
+        m = re.fullmatch(r'/api/tasks/([0-9a-fA-F-]{32,36})/delete', path)
+        if m:
+            task_id = m.group(1)
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                payload = json.loads(self.rfile.read(length) or b'{}')
+                include_children = bool(payload.get('include_children', False))
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'Invalid JSON body')
+                return
+
+            try:
+                all_tasks = load_all_tasks()
+                task_by_id = {t['id']: t for t in all_tasks}
+
+                if task_id not in task_by_id:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b'Task not found')
+                    return
+
+                # Collect IDs to delete via BFS over created_by relationships
+                ids_to_delete = set()
+                queue = [task_id]
+                while queue:
+                    current = queue.pop()
+                    if current in ids_to_delete:
+                        continue
+                    ids_to_delete.add(current)
+                    if include_children:
+                        for t in all_tasks:
+                            if t.get('created_by') == current and t['id'] not in ids_to_delete:
+                                queue.append(t['id'])
+
+                # Delete task files
+                for tid in ids_to_delete:
+                    p = TASKS_FOLDER / f"{tid}.json"
+                    if p.exists():
+                        p.unlink()
+
+                # Update remaining tasks: strip deleted refs from blocked_by and created_by
+                for t in all_tasks:
+                    if t['id'] in ids_to_delete:
+                        continue
+                    changed = False
+                    orig_blocked = t.get('blocked_by', [])
+                    new_blocked = [b for b in orig_blocked if b not in ids_to_delete]
+                    if new_blocked != orig_blocked:
+                        t['blocked_by'] = new_blocked
+                        changed = True
+                    if t.get('created_by') in ids_to_delete:
+                        t['created_by'] = None
+                        changed = True
+                    if changed:
+                        path_t = TASKS_FOLDER / f"{t['id']}.json"
+                        with open(path_t, 'w') as f:
+                            json.dump(t, f, indent=2)
+                            f.write('\n')
+
+                title = task_by_id[task_id].get('title', task_id)[:60]
+                suffix = f' (+{len(ids_to_delete)-1} children)' if len(ids_to_delete) > 1 else ''
+                git_commit(f'Delete task: {title}{suffix}')
+
+                body = json.dumps({'ok': True, 'deleted': list(ids_to_delete)}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(exc).encode('utf-8'))
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
     def log_message(self, fmt, *args):  # suppress access log noise
         pass

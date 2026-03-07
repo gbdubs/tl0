@@ -70,6 +70,8 @@ def main():
         prog="tl0h",
         description="tl0 human interface — task coordination for parallel AI agents",
     )
+    parser.add_argument('-C', '--project-dir', type=str,
+                        help='Run as if invoked from this directory')
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # init
@@ -123,6 +125,14 @@ def main():
 
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
+
+    # Change working directory before any subcommand imports (which resolve config from cwd)
+    if args.project_dir:
+        target = Path(args.project_dir).expanduser().resolve()
+        if not target.is_dir():
+            print(f"Error: --project-dir '{args.project_dir}' is not a directory", file=sys.stderr)
+            sys.exit(1)
+        os.chdir(target)
 
     if args.command is None:
         parser.print_help()

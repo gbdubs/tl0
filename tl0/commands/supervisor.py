@@ -33,7 +33,21 @@ from tl0.common import (
     task_updated_at, TRANSCRIPTS_FOLDER,
 )
 from tl0.config import load_config
-from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary
+from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary, _build_transcript_messages
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bird names for worker naming
+# ──────────────────────────────────────────────────────────────────────────────
+
+BIRD_NAMES = [
+    "Avocet", "Bobolink", "Crow", "Dowitcher", "Egret",
+    "Finch", "Goshawk", "Harrier", "Ibis", "Jay",
+    "Killdeer", "Loon", "Magpie", "Nuthatch", "Oriole",
+    "Parrot", "Quail", "Robin", "Sparrow", "Towhee",
+    "Uguisu", "Vulture", "Waxwing", "Xenops", "Yellowthroat",
+    "Zebra Finch",
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -125,8 +139,18 @@ class SupervisorState:
         self.quota_auto_drained = False  # True if we auto-drained due to high utilization
         self._pre_drain_parallelism: int = 0
 
+    def _next_bird_name(self) -> str:
+        """Return the first bird name not currently in use by an active worker."""
+        used = {w.slot_id for w in self.workers.values()}
+        for name in BIRD_NAMES:
+            if name not in used:
+                return name
+        # Fallback if all bird names are taken
+        return f"worker-{uuid.uuid4().hex[:6]}"
+
     def spawn_loop(self) -> LoopWorker:
-        slot_id = uuid.uuid4().hex[:8]
+        bird_name = self._next_bird_name()
+        slot_id = bird_name
         status_file = self.status_dir / f"{slot_id}.json"
 
         env = os.environ.copy()
@@ -137,6 +161,7 @@ class SupervisorState:
         args = [
             "bash", str(self.loop_script),
             "--max-tasks", "1",
+            "--agent", bird_name,
         ] + self.base_loop_args
 
         proc = subprocess.Popen(
@@ -1278,8 +1303,11 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
                 .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
+                .replace("fetch('/api/transcript-messages/'", "fetch('/viewer/api/transcript-messages/'") \
+                .replace("fetch('/api/all-transcripts')", "fetch('/viewer/api/all-transcripts')") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
-                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'")
+                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
+                .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
@@ -1309,9 +1337,28 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
             self._respond_json(tasks)
 
+        elif path.startswith('/viewer/api/transcript-messages/'):
+            parts = path.split('/')
+            # /viewer/api/transcript-messages/<task_id>/<filename>
+            if len(parts) >= 6:
+                task_id = parts[4]
+                filename = parts[5]
+                self._respond_json(_build_transcript_messages(task_id, filename))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         elif path.startswith('/viewer/api/transcripts/'):
             task_id = path.split('/')[-1]
             self._respond_json(_build_transcript_summary(task_id))
+
+        elif path == '/viewer/api/all-transcripts':
+            result = {}
+            if TRANSCRIPTS_FOLDER.is_dir():
+                for td in TRANSCRIPTS_FOLDER.iterdir():
+                    if td.is_dir():
+                        result[td.name] = _build_transcript_summary(td.name)
+            self._respond_json(result)
 
         elif path.startswith('/viewer/api/loop-log/'):
             task_id = path.split('/')[-1]
@@ -1321,6 +1368,22 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif path.startswith('/viewer/api/diff-stat/'):
+            sha = path.split('/')[-1]
+            if not re.fullmatch(r'[0-9a-fA-F]{6,40}', sha) or not self.code_repo:
+                self._respond_json({'files': 0})
+                return
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', '--numstat', f'{sha}~1..{sha}'],
+                    cwd=self.code_repo,
+                    capture_output=True, text=True, timeout=10,
+                )
+                files = len([l for l in result.stdout.splitlines() if l.strip()]) if result.returncode == 0 else 0
+            except Exception:
+                files = 0
+            self._respond_json({'files': files})
 
         elif path.startswith('/viewer/api/diff/'):
             sha = path.split('/')[-1]
