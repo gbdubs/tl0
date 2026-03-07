@@ -558,7 +558,7 @@ if text_parts:
   # --- Fallback: extract result from Claude's stdout ---
   if [ -z "$result_text" ] && [ -n "$claude_stdout" ]; then
     local fallback
-    fallback=$(printf '%s' "$claude_stdout" | tail -c 500)
+    fallback=$(printf '%s' "$claude_stdout" | head -c 500)
     if [ -n "$fallback" ]; then
       result_text="[fallback-from-stdout] $fallback"
       log "    No .task-result.txt found; using Claude stdout as fallback result."
@@ -642,11 +642,15 @@ if text_parts:
     return 1
   fi
 
+  # --- Capture merge SHA ---
+  local merge_sha
+  merge_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+
   # --- Mark task done ---
   if [ -z "$result_text" ]; then
     result_text="Implemented by $AGENT_ID. $commit_count commit(s) merged to main."
   fi
-  tl0m done --result "$result_text" 2>/dev/null \
+  tl0m done --result "$result_text" ${merge_sha:+--merge-sha "$merge_sha"} 2>/dev/null \
     || warn "Failed to mark task done. May need manual completion."
 
   # --- Cleanup ---

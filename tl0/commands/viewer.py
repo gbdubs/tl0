@@ -8,7 +8,9 @@ Usage:
 import argparse
 import html
 import json
+import re
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -73,13 +75,28 @@ body {
   font-size: 11px; transition: background 0.1s;
 }
 #refresh-btn:hover { background: #4b5563; }
-#chart-mode-btn {
+#view-dropdown-wrap { position: relative; }
+#view-dropdown-btn {
   padding: 4px 10px; border-radius: 5px; cursor: pointer;
   background: #374151; border: 1px solid #4b5563; color: #e5e7eb;
   font-size: 11px; transition: all 0.1s;
 }
-#chart-mode-btn:hover { background: #4b5563; }
-#chart-mode-btn.active { background: #2563eb; border-color: #3b82f6; color: white; }
+#view-dropdown-btn:hover { background: #4b5563; }
+#view-dropdown-btn.active { background: #2563eb; border-color: #3b82f6; color: white; }
+#view-dropdown-menu {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: #1f2937; border: 1px solid #374151; border-radius: 6px;
+  overflow: hidden; z-index: 100; min-width: 150px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+#view-dropdown-menu button {
+  display: block; width: 100%; padding: 8px 14px; text-align: left;
+  background: none; border: none; color: #e5e7eb; font-size: 12px;
+  cursor: pointer; transition: background 0.1s;
+}
+#view-dropdown-menu button:hover { background: #374151; }
+#view-dropdown-menu button.active { color: #60a5fa; }
+#sidebar.hidden { display: none; }
 
 /* ── App shell ──────────────────────────────────────────────── */
 #app { display: flex; flex: 1; overflow: hidden; }
@@ -387,6 +404,91 @@ body {
 }
 .log-btn:hover { background: #4b5563; }
 
+/* ── Diff viewer ──────────────────────────────────────────── */
+.diff-line-add { background: #dcfce7; color: #166534; }
+.diff-line-del { background: #fee2e2; color: #991b1b; }
+.diff-line-hunk { color: #6366f1; font-weight: 600; }
+.diff-line-header { color: #9ca3af; font-weight: 600; }
+.sha-badge {
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px;
+  background: #f3f4f6; border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; color: var(--accent);
+  transition: background 0.1s;
+}
+.sha-badge:hover { background: #e5e7eb; }
+.sha-github-link {
+  font-size: 11px; color: var(--text-muted); margin-left: 8px;
+  text-decoration: none;
+}
+.sha-github-link:hover { color: var(--accent); text-decoration: underline; }
+
+/* ── Conversation viewer ──────────────────────────────────── */
+.conv-panel {
+  background: white; color: var(--text); border-radius: 12px;
+  width: min(92vw, 1000px); max-height: 90vh; display: flex; flex-direction: column;
+  box-shadow: 0 25px 50px rgba(0,0,0,.5);
+}
+.conv-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.conv-panel-header h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.conv-panel-body { flex: 1; overflow: auto; padding: 16px; }
+.conv-msg {
+  margin-bottom: 12px; border-radius: 8px; padding: 10px 14px;
+  font-size: 13px; line-height: 1.6;
+}
+.conv-msg.assistant {
+  background: #eff6ff; border: 1px solid #bfdbfe;
+}
+.conv-msg.user {
+  background: #f9fafb; border: 1px solid var(--border);
+}
+.conv-msg-role {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 6px;
+}
+.conv-msg.assistant .conv-msg-role { color: #2563eb; }
+.conv-msg.user .conv-msg-role { color: #6b7280; }
+.conv-msg-text { white-space: pre-wrap; word-break: break-word; }
+.conv-tool-use {
+  background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;
+  padding: 8px 10px; margin-top: 6px; font-size: 12px;
+}
+.conv-tool-name {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-weight: 600; color: #0369a1; font-size: 12px;
+}
+.conv-tool-input {
+  margin-top: 4px; font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: #374151;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 200px; overflow-y: auto;
+  background: white; border-radius: 4px; padding: 6px 8px;
+}
+.conv-tool-result {
+  background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;
+  padding: 8px 10px; margin-top: 6px; font-size: 12px;
+}
+.conv-tool-result-header {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-weight: 600; color: #15803d; font-size: 11px; margin-bottom: 4px;
+}
+.conv-tool-result-body {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: #374151;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 200px; overflow-y: auto;
+  background: white; border-radius: 4px; padding: 6px 8px;
+}
+.conv-tool-toggle {
+  font-size: 11px; color: var(--accent); cursor: pointer;
+  margin-top: 4px; user-select: none;
+}
+.conv-tool-toggle:hover { text-decoration: underline; }
+.exec-invocation { cursor: pointer; transition: background 0.1s; }
+.exec-invocation:hover { background: #eef2ff; }
+
 /* ── Nav buttons ───────────────────────────────────────────── */
 .nav-btn {
   width: 28px; height: 28px; border-radius: 5px; cursor: pointer;
@@ -454,6 +556,78 @@ mark {
   stroke: #d1d5db; stroke-width: 1; stroke-dasharray: 3,3;
 }
 
+/* ── Table view ─────────────────────────────────────────── */
+#table-container {
+  display: none; flex: 1; flex-direction: column; overflow: hidden;
+}
+#table-container.visible { display: flex; }
+#table-controls {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; background: var(--sidebar-bg);
+}
+#table-controls .table-result-count {
+  font-size: 11px; color: var(--text-muted); margin-right: auto;
+}
+#col-picker-wrap { position: relative; }
+#col-picker-btn {
+  padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  background: white; border: 1px solid var(--border); color: var(--text);
+  font-size: 11px; transition: all 0.1s;
+}
+#col-picker-btn:hover { border-color: #9ca3af; }
+#col-picker-menu {
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: white; border: 1px solid var(--border); border-radius: 6px;
+  z-index: 100; min-width: 180px; max-height: 400px; overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12); padding: 4px 0;
+}
+#col-picker-menu label {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; font-size: 12px; cursor: pointer;
+  transition: background 0.1s;
+}
+#col-picker-menu label:hover { background: #f9fafb; }
+#col-picker-menu input[type="checkbox"] { margin: 0; }
+#table-wrap {
+  flex: 1; overflow: auto;
+}
+#task-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+#task-table thead { position: sticky; top: 0; z-index: 10; }
+#task-table th {
+  background: #f9fafb; border-bottom: 2px solid var(--border);
+  padding: 7px 10px; text-align: left; font-size: 11px;
+  font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 0.4px; cursor: pointer; user-select: none;
+  white-space: nowrap; position: relative;
+}
+#task-table th:hover { background: #f3f4f6; }
+#task-table th .sort-arrow {
+  font-size: 9px; margin-left: 3px; color: #9ca3af;
+}
+#task-table th .sort-arrow.active { color: var(--accent); }
+#task-table td {
+  padding: 6px 10px; border-bottom: 1px solid #f3f4f6;
+  white-space: nowrap; max-width: 300px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+#task-table tbody tr:hover { background: #f9fafb; }
+#task-table .task-name-cell {
+  color: var(--accent); cursor: pointer; font-weight: 500;
+  max-width: 350px; overflow: hidden; text-overflow: ellipsis;
+}
+#task-table .task-name-cell:hover { text-decoration: underline; }
+#task-table .num-cell { text-align: right; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; }
+#task-table .badge { font-size: 10px; }
+#task-table .merge-yes { color: #dc2626; font-weight: 600; }
+#task-table .merge-no { color: #9ca3af; }
+#table-loading {
+  display: flex; align-items: center; justify-content: center;
+  padding: 48px; color: var(--text-muted); font-size: 13px;
+}
+
 /* Scrollbars */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -468,8 +642,16 @@ mark {
   <button class="nav-btn" id="nav-back" onclick="navBack()" disabled title="Back (Alt+←)">←</button>
   <button class="nav-btn" id="nav-fwd"  onclick="navFwd()"  disabled title="Forward (Alt+→)">→</button>
   <div id="stats">Loading…</div>
-  <button id="chart-mode-btn" onclick="toggleChartMode()">Chart</button>
   <button id="refresh-btn" onclick="refresh()">↺ Refresh</button>
+  <div id="view-dropdown-wrap">
+    <button id="view-dropdown-btn" onclick="toggleViewDropdown()">View ▾</button>
+    <div id="view-dropdown-menu" style="display:none">
+      <button id="view-chart-item" onclick="setView(state.view === 'chart' ? 'tree' : 'chart'); closeViewDropdown()">Chart</button>
+      <button id="view-table-item" onclick="setView(state.view === 'table' ? 'tree' : 'table'); closeViewDropdown()">Table</button>
+      <button id="view-sidebar-item" onclick="toggleSidebar(); closeViewDropdown()">Hide Sidebar</button>
+    </div>
+  </div>
+  <span id="supervisor-link-slot"></span>
 </div>
 
 <div id="app">
@@ -517,9 +699,23 @@ mark {
     <div id="chart-svg-wrap"></div>
     <div id="chart-legend"></div>
   </div>
+
+  <div id="table-container">
+    <div id="table-controls">
+      <span class="table-result-count" id="table-result-count"></span>
+      <div id="col-picker-wrap">
+        <button id="col-picker-btn" onclick="toggleColPicker()">Columns ▾</button>
+        <div id="col-picker-menu" style="display:none"></div>
+      </div>
+    </div>
+    <div id="table-wrap">
+      <table id="task-table"><thead><tr></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
 </div>
 <div id="chart-tooltip"></div>
 
+<script>window.__GITHUB_REPO_URL__ = '{{GITHUB_REPO_URL}}';</script>
 <script>
 // ── State ────────────────────────────────────────────────────
 let allTasks = [];
@@ -532,6 +728,7 @@ const state = {
   activeTags:            [],
   search:                '',
   view:                  'tree',
+  sidebarVisible:        true,
   expandedNodes:         new Set(),
   detailExpandedNodes:   new Set(),
   expandedTagCategories: new Set(),
@@ -550,19 +747,11 @@ function pushNav(id) {
 }
 function navBack() {
   if (navPos <= 0) return;
-  navPos--;
-  const id = navStack[navPos];
-  history.replaceState({ taskId: id }, '', '#' + id);
-  updateNavBtns();
-  _activateTask(id);
+  history.back();
 }
 function navFwd() {
   if (navPos >= navStack.length - 1) return;
-  navPos++;
-  const id = navStack[navPos];
-  history.replaceState({ taskId: id }, '', '#' + id);
-  updateNavBtns();
-  _activateTask(id);
+  history.forward();
 }
 function updateNavBtns() {
   document.getElementById('nav-back').disabled = navPos <= 0;
@@ -587,7 +776,8 @@ function loadSavedState() {
     if (s.modelFilter)  state.modelFilter   = s.modelFilter;
     if (s.activeTags)   state.activeTags    = s.activeTags;
     if (s.search)       state.search        = s.search;
-    if (s.view) state.view = (['tree','chart'].includes(s.view) ? s.view : 'tree');
+    if (s.view) state.view = (['tree','chart','table'].includes(s.view) ? s.view : 'tree');
+    if (s.sidebarVisible !== undefined) state.sidebarVisible = s.sidebarVisible;
     if (s.expandedNodes)         state.expandedNodes         = new Set(s.expandedNodes);
     if (s.detailExpandedNodes)   state.detailExpandedNodes   = new Set(s.detailExpandedNodes);
     if (s.expandedTagCategories) state.expandedTagCategories = new Set(s.expandedTagCategories);
@@ -602,6 +792,7 @@ function persist() {
       activeTags:    state.activeTags,
       search:        state.search,
       view:          state.view,
+      sidebarVisible: state.sidebarVisible,
       expandedNodes:           [...state.expandedNodes],
       detailExpandedNodes:     [...state.detailExpandedNodes],
       expandedTagCategories:   [...state.expandedTagCategories],
@@ -619,6 +810,7 @@ async function loadTasks() {
     updateStats();
     renderTagFilters();
     if (state.view === 'chart') renderChart();
+    else if (state.view === 'table') renderTable();
     else renderTaskList();
     if (_initialLoad) {
       _initialLoad = false;
@@ -665,6 +857,65 @@ async function fetchTranscript(taskId) {
   } catch (_) { return null; }
 }
 
+async function showInvocationDetail(taskId, filename) {
+  try {
+    const res = await fetch(`/api/transcript-messages/${taskId}/${filename}`);
+    if (!res.ok) return;
+    const messages = await res.json();
+    const overlay = document.createElement('div');
+    overlay.className = 'log-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    let body = '';
+    messages.forEach(msg => {
+      if (msg.role === 'assistant') {
+        body += `<div class="conv-msg assistant"><div class="conv-msg-role">Assistant</div>`;
+        (msg.content || []).forEach(block => {
+          if (block.type === 'text' && block.text) {
+            body += `<div class="conv-msg-text">${esc(block.text)}</div>`;
+          } else if (block.type === 'tool_use') {
+            const inputStr = JSON.stringify(block.input, null, 2);
+            const inputId = 'ti-' + block.id;
+            body += `<div class="conv-tool-use">`;
+            body += `<span class="conv-tool-name">${esc(block.name)}</span>`;
+            body += `<div class="conv-tool-input" id="${inputId}" style="display:none">${esc(inputStr)}</div>`;
+            body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${inputId}')">Show input</div>`;
+            body += `</div>`;
+          }
+        });
+        body += `</div>`;
+      } else if (msg.role === 'tool_result') {
+        const resultId = 'tr-' + msg.tool_use_id;
+        body += `<div class="conv-tool-result">`;
+        body += `<div class="conv-tool-result-header">${esc(msg.tool_name || 'Tool Result')}</div>`;
+        body += `<div class="conv-tool-result-body" id="${resultId}" style="display:none">${esc(msg.text)}</div>`;
+        body += `<div class="conv-tool-toggle" onclick="toggleConvEl('${resultId}')">Show output</div>`;
+        body += `</div>`;
+      }
+    });
+    overlay.innerHTML = `<div class="conv-panel">
+      <div class="conv-panel-header">
+        <h3>Execution — ${esc(filename)}</h3>
+        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
+      </div>
+      <div class="conv-panel-body">${body}</div>
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch (_) {}
+}
+
+function toggleConvEl(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const toggle = el.nextElementSibling || el.parentElement.querySelector('.conv-tool-toggle');
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    if (toggle && toggle.classList.contains('conv-tool-toggle')) toggle.textContent = toggle.textContent.replace('Show', 'Hide');
+  } else {
+    el.style.display = 'none';
+    if (toggle && toggle.classList.contains('conv-tool-toggle')) toggle.textContent = toggle.textContent.replace('Hide', 'Show');
+  }
+}
+
 async function showLoopLog(taskId) {
   try {
     const res = await fetch('/api/loop-log/' + taskId);
@@ -684,13 +935,49 @@ async function showLoopLog(taskId) {
   } catch (_) {}
 }
 
+async function showDiff(sha) {
+  try {
+    const res = await fetch('/api/diff/' + encodeURIComponent(sha));
+    if (!res.ok) { alert('Failed to load diff'); return; }
+    const text = await res.text();
+    const overlay = document.createElement('div');
+    overlay.className = 'log-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    // Syntax highlight diff lines
+    const highlighted = text.split('\n').map(line => {
+      if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-line-add">${esc(line)}</span>`;
+      if (line.startsWith('-') && !line.startsWith('---')) return `<span class="diff-line-del">${esc(line)}</span>`;
+      if (line.startsWith('@@')) return `<span class="diff-line-hunk">${esc(line)}</span>`;
+      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) return `<span class="diff-line-header">${esc(line)}</span>`;
+      return esc(line);
+    }).join('\n');
+    overlay.innerHTML = `<div class="log-panel" style="width:min(95vw,1100px);max-height:90vh">
+      <div class="log-panel-header">
+        <h3>Diff — ${esc(sha.slice(0,8))}</h3>
+        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
+      </div>
+      <div class="log-panel-body">${highlighted}</div>
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch (_) {}
+}
+
 function renderEventTimeline(events) {
   const colorMap = {created:'#9ca3af', claimed:'#3b82f6', freed:'#fb923c', done:'#22c55e'};
   let html = '<div class="event-timeline">';
-  events.forEach(e => {
+  const t0 = events.length ? new Date(events[0].at).getTime() : 0;
+  events.forEach((e, i) => {
     const c = colorMap[e.type] || '#9ca3af';
     const d = new Date(e.at);
-    const timeStr = d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    let timeStr;
+    if (i === 0) {
+      timeStr = d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    } else {
+      const diffSec = Math.round((d.getTime() - t0) / 1000);
+      const m = Math.floor(diffSec / 60);
+      const s = diffSec % 60;
+      timeStr = m > 0 ? `+${m}m ${s}s` : `+${s}s`;
+    }
     html += `<div class="event-row">
       <div class="event-dot" style="background:${c};box-shadow:0 0 0 1px ${c}"></div>
       <span class="event-type">${e.type}</span>
@@ -702,7 +989,7 @@ function renderEventTimeline(events) {
   return html;
 }
 
-function renderExecSection(tx) {
+function renderExecSection(tx, taskId) {
   let html = '<div class="exec-grid">';
   if (tx.total_duration_ms != null) {
     const secs = (tx.total_duration_ms / 1000).toFixed(1);
@@ -719,12 +1006,13 @@ function renderExecSection(tx) {
   // Invocations detail
   if (tx.invocations) {
     tx.invocations.forEach(inv => {
-      html += `<div class="exec-invocation">`;
+      html += `<div class="exec-invocation" onclick="showInvocationDetail('${taskId}', '${escAttr(inv.file)}')" title="Click to view conversation">`;
       html += `<div class="exec-invocation-header">`;
       html += `<span style="font-family:monospace;font-size:11px">${esc(inv.file)}</span>`;
       if (inv.model) html += `<span class="d-badge badge-${inv.model.includes('opus')?'opus':inv.model.includes('sonnet')?'sonnet':'haiku'}" style="font-size:10px;padding:1px 6px">${esc(inv.model)}</span>`;
       if (inv.duration_ms != null) html += `<span style="color:var(--text-muted);font-size:11px">${(inv.duration_ms/1000).toFixed(1)}s</span>`;
       if (inv.cost_usd != null) html += `<span style="color:var(--text-muted);font-size:11px">$${inv.cost_usd.toFixed(4)}</span>`;
+      html += `<span style="color:var(--accent);font-size:11px;margin-left:auto">View →</span>`;
       html += `</div>`;
       if (inv.tool_usage && Object.keys(inv.tool_usage).length) {
         html += `<div class="exec-tools">`;
@@ -741,6 +1029,7 @@ function renderExecSection(tx) {
 
 async function refresh() {
   document.getElementById('stats').textContent = 'Refreshing…';
+  _allTranscripts = null; // invalidate transcript cache
   await loadTasks();
 }
 
@@ -849,19 +1138,52 @@ function setView(v) {
   state.view = v;
   persist();
   const isChart = v === 'chart';
-  document.getElementById('chart-mode-btn').classList.toggle('active', isChart);
-  document.getElementById('task-list-container').style.display = isChart ? 'none' : '';
-  document.getElementById('detail').style.display = isChart ? 'none' : '';
+  const isTable = v === 'table';
+  document.getElementById('task-list-container').style.display = (isChart || isTable) ? 'none' : '';
+  document.getElementById('detail').style.display = (isChart || isTable) ? 'none' : '';
   document.getElementById('chart-container').classList.toggle('visible', isChart);
+  document.getElementById('table-container').classList.toggle('visible', isTable);
+  updateViewDropdownItems();
   if (isChart) renderChart();
+  else if (isTable) renderTable();
   else renderTaskList();
+}
+function updateViewDropdownItems() {
+  const isChart = state.view === 'chart';
+  const isTable = state.view === 'table';
+  const chartItem = document.getElementById('view-chart-item');
+  if (chartItem) chartItem.classList.toggle('active', isChart);
+  const tableItem = document.getElementById('view-table-item');
+  if (tableItem) tableItem.classList.toggle('active', isTable);
+  const sidebarItem = document.getElementById('view-sidebar-item');
+  if (sidebarItem) sidebarItem.textContent = state.sidebarVisible ? 'Hide Sidebar' : 'Show Sidebar';
+  document.getElementById('view-dropdown-btn').classList.toggle('active', isChart || isTable);
+}
+function toggleViewDropdown() {
+  const menu = document.getElementById('view-dropdown-menu');
+  updateViewDropdownItems();
+  menu.style.display = menu.style.display === 'none' ? '' : 'none';
+}
+function closeViewDropdown() {
+  const menu = document.getElementById('view-dropdown-menu');
+  if (menu) menu.style.display = 'none';
+}
+function toggleSidebar() {
+  state.sidebarVisible = !state.sidebarVisible;
+  persist();
+  document.getElementById('sidebar').classList.toggle('hidden', !state.sidebarVisible);
+  updateViewDropdownItems();
 }
 function toggleChartMode() {
   setView(state.view === 'chart' ? 'tree' : 'chart');
 }
+function toggleTableMode() {
+  setView(state.view === 'table' ? 'tree' : 'table');
+}
 
 function renderTaskList() {
   if (state.view === 'chart') { renderChart(); return; }
+  if (state.view === 'table') { renderTable(); return; }
   const filtered   = getFiltered();
   const container  = document.getElementById('task-list');
   container.innerHTML = '';
@@ -1132,7 +1454,7 @@ function renderDetail(id) {
   html += `<span class="d-badge" style="background:${sbg};color:${sfg}">${task.status}</span>`;
   html += `<span class="d-badge badge-${task.model}">${task.model}</span>`;
   if (task.thinking) html += `<span class="d-badge badge-think">🧠 extended thinking</span>`;
-  html += `<span style="font-size:11px;color:var(--text-muted);font-family:monospace">${task.id.slice(0,8)}</span>`;
+  html += `<span style="font-size:11px;color:var(--text-muted);font-family:monospace">${task.id}</span>`;
   html += `</div>`;
 
   // Stuck banner
@@ -1151,16 +1473,6 @@ function renderDetail(id) {
     <pre class="d-pre">${highlightText(task.description, state.search.trim())}</pre>
   </div>`;
 
-  // Metadata
-  html += `<div class="d-section"><div class="d-label">Metadata</div><div class="d-meta-grid">`;
-  html += metaItem('Created', `${fmt(task.created_at)} ${agoStr(task.created_at)}`);
-  html += metaItem('Updated', `${fmt(task.updated_at)} ${agoStr(task.updated_at)}`);
-  if (task.claimed_by)   html += metaItem('Claimed by', esc(task.claimed_by));
-  if (task.claimed_at)   html += metaItem('Claimed at', fmt(task.claimed_at));
-  if (task.completed_at) html += metaItem('Completed',  `${fmt(task.completed_at)} ${agoStr(task.completed_at)}`);
-  html += metaItem('Full ID', `<span style="font-family:monospace;font-size:11px">${task.id}</span>`);
-  html += `</div></div>`;
-
   // Event timeline
   if (task.events && task.events.length) {
     html += `<div class="d-section"><div class="d-label">Events</div>`;
@@ -1177,7 +1489,7 @@ function renderDetail(id) {
       let s = '<div class="d-section"><div class="d-label" style="display:flex;align-items:center;justify-content:space-between">Execution';
       if (tx.has_loop_log) s += ` <button class="log-btn" onclick="showLoopLog('${task.id}')">View Loop Log</button>`;
       s += '</div>';
-      s += renderExecSection(tx);
+      s += renderExecSection(tx, task.id);
       s += '</div>';
       el.innerHTML = s;
     });
@@ -1195,6 +1507,17 @@ function renderDetail(id) {
   // Result
   if (task.result) {
     html += `<div class="d-section"><div class="d-label">Result</div><div class="result-box">${esc(task.result)}</div></div>`;
+  }
+
+  // Commit (merge SHA)
+  if (task.merge_sha) {
+    const shortSha = task.merge_sha.slice(0, 8);
+    html += `<div class="d-section"><div class="d-label">Commit</div><div style="display:flex;align-items:center;gap:8px">`;
+    html += `<span class="sha-badge" onclick="showDiff('${escAttr(task.merge_sha)}')" title="View diff">${shortSha}</span>`;
+    if (window.__GITHUB_REPO_URL__) {
+      html += `<a class="sha-github-link" href="${window.__GITHUB_REPO_URL__}/commit/${encodeURIComponent(task.merge_sha)}" target="_blank" rel="noopener">View on GitHub ↗</a>`;
+    }
+    html += `</div></div>`;
   }
 
   // Source chain (progenitor trace)
@@ -1453,25 +1776,24 @@ function buildTimeline(tasks) {
 function collapseGaps(timeline) {
   if (timeline.length < 2) return timeline.map((p, i) => ({ ...p, x: i }));
 
-  // Compute intervals
-  const intervals = [];
-  for (let i = 1; i < timeline.length; i++) {
-    intervals.push(timeline[i].time - timeline[i - 1].time);
-  }
-  // Median interval
-  const sortedIntervals = [...intervals].sort((a, b) => a - b);
-  const median = sortedIntervals[Math.floor(sortedIntervals.length / 2)];
-  const threshold = median * 3;
+  const GAP_THRESHOLD = 60 * 60 * 1000; // 1 hour in ms
 
-  // Build collapsed x coordinates
-  const result = [{ ...timeline[0], x: 0, gap: false }];
-  let x = 0;
-  const gapUnit = median || 1; // unit size for collapsed gaps
+  // Compute total non-gap time to determine a proportional gap size
+  let totalRealTime = 0;
   for (let i = 1; i < timeline.length; i++) {
     const dt = timeline[i].time - timeline[i - 1].time;
-    const isGap = dt > threshold && threshold > 0;
+    if (dt <= GAP_THRESHOLD) totalRealTime += dt;
+  }
+  // Gap visual width = 3% of total real time (gives a visible but small splice mark)
+  const gapVisualSize = Math.max(totalRealTime * 0.03, 1);
+
+  const result = [{ ...timeline[0], x: 0, gap: false }];
+  let x = 0;
+  for (let i = 1; i < timeline.length; i++) {
+    const dt = timeline[i].time - timeline[i - 1].time;
+    const isGap = dt > GAP_THRESHOLD;
     if (isGap) {
-      x += gapUnit; // compressed gap
+      x += gapVisualSize;
     } else {
       x += dt;
     }
@@ -1535,12 +1857,16 @@ function renderChart() {
     areas[status] = points.trim();
   });
 
-  // Gap indicators
+  // Gap indicators — draw a pair of dotted lines to indicate spliced-out time
   let gapLines = '';
-  collapsed.forEach(p => {
-    if (p.gap) {
-      const gx = sx(p.x);
-      gapLines += `<line class="gap-indicator" x1="${gx}" y1="${pad.top}" x2="${gx}" y2="${pad.top + ch}"/>`;
+  collapsed.forEach((p, i) => {
+    if (p.gap && i > 0) {
+      const gxRight = sx(p.x);
+      const gxLeft = sx(collapsed[i - 1].x);
+      const mid = (gxLeft + gxRight) / 2;
+      const half = Math.min(6, (gxRight - gxLeft) / 2 - 1);
+      gapLines += `<line class="gap-indicator" x1="${mid - half}" y1="${pad.top}" x2="${mid - half}" y2="${pad.top + ch}"/>`;
+      gapLines += `<line class="gap-indicator" x1="${mid + half}" y1="${pad.top}" x2="${mid + half}" y2="${pad.top + ch}"/>`;
     }
   });
 
@@ -1636,6 +1962,260 @@ window.addEventListener('resize', () => {
   _chartResizeTimer = setTimeout(renderChart, 150);
 });
 
+// ── Table view ───────────────────────────────────────────────
+let _allTranscripts = null;
+let _tableSort = { col: null, dir: 'asc' };
+
+const TABLE_COLUMNS = [
+  { key: 'title',            label: 'Task',            type: 'text',   default: true },
+  { key: 'status',           label: 'Status',          type: 'badge',  default: true },
+  { key: 'model',            label: 'Model',           type: 'badge',  default: true },
+  { key: 'duration',         label: 'Duration',        type: 'num',    default: true },
+  { key: 'cost',             label: 'Cost',            type: 'num',    default: true },
+  { key: 'turns',            label: 'Turns',           type: 'num',    default: true },
+  { key: 'tool_errors',      label: 'Tool Errors',     type: 'num',    default: false },
+  { key: 'merge_conflicts',  label: 'Merge Conflicts', type: 'num',    default: true },
+  { key: 'Read',             label: 'Read',            type: 'tool',   default: true },
+  { key: 'Edit',             label: 'Edit',            type: 'tool',   default: true },
+  { key: 'Write',            label: 'Write',           type: 'tool',   default: false },
+  { key: 'Bash',             label: 'Bash',            type: 'tool',   default: true },
+  { key: 'Glob',             label: 'Glob',            type: 'tool',   default: false },
+  { key: 'Grep',             label: 'Grep',            type: 'tool',   default: false },
+  { key: 'Task',             label: 'Task (subtask)',  type: 'tool',   default: false },
+  { key: 'WebFetch',         label: 'WebFetch',        type: 'tool',   default: false },
+  { key: 'other_tools',      label: 'Other Tools',     type: 'num',    default: false },
+  { key: 'completed_at',     label: 'Completed',       type: 'time',   default: true },
+  { key: 'tags',             label: 'Tags',            type: 'tags',   default: false },
+];
+
+// Track which columns are visible
+let _visibleCols = new Set(TABLE_COLUMNS.filter(c => c.default).map(c => c.key));
+// Restore from localStorage if available
+try {
+  const saved = JSON.parse(localStorage.getItem('tl0_table_cols') || 'null');
+  if (Array.isArray(saved)) _visibleCols = new Set(saved);
+} catch (_) {}
+
+function _persistCols() {
+  localStorage.setItem('tl0_table_cols', JSON.stringify([..._visibleCols]));
+}
+
+const KNOWN_TOOLS = ['Read','Edit','Write','Bash','Glob','Grep','Task','WebFetch'];
+
+function _getTableVal(task, ts, col) {
+  switch (col.key) {
+    case 'title':           return task.title || '';
+    case 'status':          return task.status || '';
+    case 'model':           return task.model || '';
+    case 'duration':        return ts ? (ts.total_duration_ms || 0) : 0;
+    case 'cost':            return ts ? (ts.total_cost_usd || 0) : 0;
+    case 'turns': {
+      if (!ts || !ts.invocations) return 0;
+      return ts.invocations.reduce((s, inv) => s + (inv.num_turns || 0), 0);
+    }
+    case 'tool_errors':     return ts ? (ts.total_tool_errors || 0) : 0;
+    case 'merge_conflicts': return ts ? (ts.merge_conflict_count || 0) : 0;
+    case 'completed_at':    return task.completed_at || '';
+    case 'tags':            return (task.tags || []).join(', ');
+    case 'other_tools': {
+      if (!ts || !ts.invocations) return 0;
+      let count = 0;
+      for (const inv of ts.invocations) {
+        if (!inv.tool_usage) continue;
+        for (const [name, n] of Object.entries(inv.tool_usage)) {
+          if (!KNOWN_TOOLS.includes(name)) count += n;
+        }
+      }
+      return count;
+    }
+    default: {
+      // Tool columns
+      if (!ts || !ts.invocations) return 0;
+      let count = 0;
+      for (const inv of ts.invocations) {
+        if (inv.tool_usage && inv.tool_usage[col.key]) count += inv.tool_usage[col.key];
+      }
+      return count;
+    }
+  }
+}
+
+function _fmtDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return m + 'm ' + rem + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+function _fmtCost(usd) {
+  if (!usd) return '—';
+  return '$' + usd.toFixed(2);
+}
+
+function _fmtRelTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  const days = Math.floor(hrs / 24);
+  return days + 'd ago';
+}
+
+function _fmtCell(task, ts, col) {
+  const val = _getTableVal(task, ts, col);
+  switch (col.key) {
+    case 'title':
+      return `<td class="task-name-cell" onclick="tableClickTask('${task.id}')" title="${(task.title||'').replace(/"/g,'&quot;')}">${_esc(task.title || '(untitled)')}</td>`;
+    case 'status': {
+      const cls = val === 'in-progress' ? 'in-progress' : val;
+      return `<td><span class="badge badge-${cls}" style="${_statusBadgeStyle(val)}">${val}</span></td>`;
+    }
+    case 'model':
+      return val ? `<td><span class="badge badge-${val}">${val}</span></td>` : '<td>—</td>';
+    case 'duration':
+      return `<td class="num-cell">${_fmtDuration(val)}</td>`;
+    case 'cost':
+      return `<td class="num-cell">${_fmtCost(val)}</td>`;
+    case 'completed_at':
+      return `<td title="${val}">${_fmtRelTime(val)}</td>`;
+    case 'tags':
+      return `<td>${(task.tags||[]).map(t => `<span class="d-tag" onclick="event.stopPropagation(); toggleTag('${_esc(t)}')">${_esc(t)}</span>`).join(' ')}</td>`;
+    case 'merge_conflicts':
+      if (val > 0) return `<td class="num-cell merge-yes">${val}</td>`;
+      return `<td class="num-cell merge-no">—</td>`;
+    case 'tool_errors':
+      if (val > 0) return `<td class="num-cell" style="color:#dc2626;font-weight:600">${val}</td>`;
+      return `<td class="num-cell" style="color:#9ca3af">—</td>`;
+    default:
+      // Numeric (tool counts, turns, etc.)
+      return val ? `<td class="num-cell">${val}</td>` : `<td class="num-cell" style="color:#d1d5db">0</td>`;
+  }
+}
+
+function _statusBadgeStyle(status) {
+  const map = {
+    'pending':     'background:#fff7ed;color:#c2410c;',
+    'claimed':     'background:#eff6ff;color:#1d4ed8;',
+    'in-progress': 'background:#f0fdf4;color:#15803d;',
+    'done':        'background:#f0fdf4;color:#166534;',
+    'stuck':       'background:#fff1f2;color:#be123c;',
+  };
+  return map[status] || '';
+}
+
+function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function renderTable() {
+  const tableEl = document.getElementById('task-table');
+  const tbody = tableEl.querySelector('tbody');
+  const thead = tableEl.querySelector('thead tr');
+
+  // Load transcript data if not cached
+  if (!_allTranscripts) {
+    tbody.innerHTML = `<tr><td colspan="99" id="table-loading">Loading transcript data…</td></tr>`;
+    thead.innerHTML = '';
+    try {
+      const res = await fetch('/api/all-transcripts');
+      _allTranscripts = await res.json();
+    } catch (_) {
+      _allTranscripts = {};
+    }
+  }
+
+  const filtered = getFiltered();
+  const visCols = TABLE_COLUMNS.filter(c => _visibleCols.has(c.key));
+
+  document.getElementById('table-result-count').textContent = `${filtered.length} tasks`;
+
+  // Build rows with sort values
+  let rows = filtered.map(task => {
+    const ts = _allTranscripts[task.id] || null;
+    return { task, ts, _sortVals: {} };
+  });
+
+  // Sort
+  if (_tableSort.col) {
+    const col = TABLE_COLUMNS.find(c => c.key === _tableSort.col);
+    if (col) {
+      rows.forEach(r => { r._sortVal = _getTableVal(r.task, r.ts, col); });
+      const dir = _tableSort.dir === 'asc' ? 1 : -1;
+      rows.sort((a, b) => {
+        const va = a._sortVal, vb = b._sortVal;
+        if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+        return String(va).localeCompare(String(vb)) * dir;
+      });
+    }
+  }
+
+  // Render header
+  thead.innerHTML = visCols.map(col => {
+    const isSorted = _tableSort.col === col.key;
+    const arrow = isSorted ? (_tableSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const arrowCls = isSorted ? 'sort-arrow active' : 'sort-arrow';
+    return `<th onclick="tableSort('${col.key}')">${col.label}<span class="${arrowCls}">${arrow}</span></th>`;
+  }).join('');
+
+  // Render body
+  tbody.innerHTML = rows.map(({task, ts}) =>
+    '<tr>' + visCols.map(col => _fmtCell(task, ts, col)).join('') + '</tr>'
+  ).join('');
+
+  // Render column picker
+  renderColPicker();
+}
+
+function tableSort(key) {
+  if (_tableSort.col === key) {
+    if (_tableSort.dir === 'asc') _tableSort.dir = 'desc';
+    else if (_tableSort.dir === 'desc') { _tableSort.col = null; _tableSort.dir = 'asc'; }
+  } else {
+    _tableSort.col = key;
+    _tableSort.dir = 'asc';
+  }
+  renderTable();
+}
+
+function tableClickTask(id) {
+  setView('tree');
+  selectTask(id);
+}
+
+function toggleColPicker() {
+  const menu = document.getElementById('col-picker-menu');
+  menu.style.display = menu.style.display === 'none' ? '' : 'none';
+}
+
+function renderColPicker() {
+  const menu = document.getElementById('col-picker-menu');
+  menu.innerHTML = TABLE_COLUMNS.map(col => {
+    const checked = _visibleCols.has(col.key) ? 'checked' : '';
+    return `<label><input type="checkbox" ${checked} onchange="toggleCol('${col.key}', this.checked)"> ${col.label}</label>`;
+  }).join('');
+}
+
+function toggleCol(key, on) {
+  if (on) _visibleCols.add(key);
+  else _visibleCols.delete(key);
+  _persistCols();
+  renderTable();
+}
+
+// Close column picker on outside click
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('col-picker-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('col-picker-menu').style.display = 'none';
+  }
+});
+
 // ── Event wiring ─────────────────────────────────────────────
 document.querySelectorAll('#status-chips .chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -1701,11 +2281,25 @@ if (state.modelFilter !== 'all') {
 }
 if (state.search) document.getElementById('search').value = state.search;
 if (state.view === 'chart') {
-  document.getElementById('chart-mode-btn').classList.add('active');
   document.getElementById('task-list-container').style.display = 'none';
   document.getElementById('detail').style.display = 'none';
   document.getElementById('chart-container').classList.add('visible');
 }
+if (state.view === 'table') {
+  document.getElementById('task-list-container').style.display = 'none';
+  document.getElementById('detail').style.display = 'none';
+  document.getElementById('table-container').classList.add('visible');
+}
+if (!state.sidebarVisible) {
+  document.getElementById('sidebar').classList.add('hidden');
+}
+updateViewDropdownItems();
+
+// Close view dropdown on outside click
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('view-dropdown-wrap');
+  if (wrap && !wrap.contains(e.target)) closeViewDropdown();
+});
 
 loadTasks();
 </script>
@@ -1733,6 +2327,87 @@ def _build_favicon_svg(color: str) -> str:
 # Transcript summary builder
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _build_transcript_messages(task_id: str, filename: str) -> list:
+    """Extract the conversation messages from a transcript JSONL file."""
+    filepath = TRANSCRIPTS_FOLDER / task_id / filename
+    if not filepath.exists():
+        return []
+
+    events = []
+    for line in filepath.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    messages = []
+    # Track tool_use IDs to tool names for labeling results
+    tool_names: dict[str, str] = {}
+    # Track which tool_use IDs we've already seen content for (assistant messages
+    # can be streamed across multiple events)
+    seen_assistant_ids: set[str] = set()
+
+    for e in events:
+        if e.get("type") == "assistant":
+            msg = e.get("message", {})
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            # Deduplicate: Claude Code streams partial assistant messages,
+            # so the same message ID appears multiple times. We keep the last one.
+            msg_id = msg.get("id", "")
+            if msg_id and msg_id in seen_assistant_ids:
+                # Replace the last assistant entry that has the same id
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("_msg_id") == msg_id:
+                        messages[i] = {"role": "assistant", "content": content, "_msg_id": msg_id}
+                        break
+            else:
+                if msg_id:
+                    seen_assistant_ids.add(msg_id)
+                messages.append({"role": "assistant", "content": content, "_msg_id": msg_id})
+
+            # Track tool names
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_names[block.get("id", "")] = block.get("name", "unknown")
+
+        elif e.get("type") == "user":
+            msg = e.get("message", {})
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "")
+                    result_content = block.get("content", "")
+                    if isinstance(result_content, list):
+                        result_content = "\n".join(
+                            b.get("text", "") for b in result_content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    elif not isinstance(result_content, str):
+                        result_content = str(result_content)
+                    # Truncate very large results
+                    if len(result_content) > 3000:
+                        result_content = result_content[:3000] + "\n… (truncated)"
+                    messages.append({
+                        "role": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_names.get(tool_use_id, "Tool"),
+                        "text": result_content,
+                    })
+
+    # Clean up internal _msg_id fields
+    for m in messages:
+        m.pop("_msg_id", None)
+
+    return messages
+
+
 def _build_transcript_summary(task_id: str) -> dict:
     """Build a JSON-serialisable summary of transcript data for a task."""
     transcript_dir = TRANSCRIPTS_FOLDER / task_id
@@ -1759,16 +2434,23 @@ def _build_transcript_summary(task_id: str) -> dict:
 
         inv: dict = {"file": jf.name, "num_events": len(events)}
 
-        # Count tool usage from assistant events
+        # Count tool usage from assistant events; count tool errors from user events
         tool_counts: dict[str, int] = {}
+        tool_error_count = 0
         for e in events:
             if e.get("type") == "assistant" and isinstance(e.get("message", {}).get("content"), list):
                 for block in e["message"]["content"]:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         name = block.get("name", "unknown")
                         tool_counts[name] = tool_counts.get(name, 0) + 1
+            elif e.get("type") == "user" and isinstance(e.get("message", {}).get("content"), list):
+                for block in e["message"]["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        if block.get("is_error"):
+                            tool_error_count += 1
         if tool_counts:
             inv["tool_usage"] = tool_counts
+        inv["tool_errors"] = tool_error_count
 
         # Extract result event data
         for e in reversed(events):
@@ -1795,6 +2477,13 @@ def _build_transcript_summary(task_id: str) -> dict:
 
         invocations.append(inv)
 
+    # Count merge-conflict resolution attempts (files named *-merge-conflict.jsonl)
+    merge_conflict_count = sum(
+        1 for jf in jsonl_files if "merge-conflict" in jf.name
+    )
+
+    total_tool_errors = sum(inv.get("tool_errors", 0) for inv in invocations)
+
     return {
         "has_transcript": True,
         "has_loop_log": loop_log.exists(),
@@ -1802,6 +2491,8 @@ def _build_transcript_summary(task_id: str) -> dict:
         "invocations": invocations,
         "total_cost_usd": total_cost,
         "total_duration_ms": total_duration,
+        "merge_conflict_count": merge_conflict_count,
+        "total_tool_errors": total_tool_errors,
     }
 
 
@@ -1812,13 +2503,16 @@ class Handler(BaseHTTPRequestHandler):
     page_title: str = "tl0 Task Viewer"
     header_bg: str = "#111827"
     favicon_svg: str = _build_favicon_svg("#111827")
+    code_repo: str = ""
+    github_repo_url: str = ""
 
     def do_GET(self):
         path = urlparse(self.path).path
 
         if path in ('/', '/index.html'):
             rendered = HTML.replace('{{PAGE_TITLE}}', html.escape(self.page_title)) \
-                          .replace('{{HEADER_BG}}', self.header_bg)
+                          .replace('{{HEADER_BG}}', self.header_bg) \
+                          .replace('{{GITHUB_REPO_URL}}', self.github_repo_url)
             body = rendered.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -1848,8 +2542,23 @@ class Handler(BaseHTTPRequestHandler):
                 t["updated_at"]    = task_updated_at(t)
                 t["tasks_created"] = t.get("task_children", [])
                 t["parent_task"]   = t.get("task_parent")
+                t["source"]        = t.get("task_parent") or "human"
                 tasks.append(t)
             body  = json.dumps(tasks).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == '/api/all-transcripts':
+            # Bulk transcript summaries for all tasks (used by table view)
+            result = {}
+            if TRANSCRIPTS_FOLDER.is_dir():
+                for td in TRANSCRIPTS_FOLDER.iterdir():
+                    if td.is_dir():
+                        result[td.name] = _build_transcript_summary(td.name)
+            body = json.dumps(result).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -1879,6 +2588,53 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif path.startswith('/api/transcript-messages/'):
+            parts = path.split('/')
+            # /api/transcript-messages/<task_id>/<filename>
+            if len(parts) >= 5:
+                task_id = parts[3]
+                filename = parts[4]
+                messages = _build_transcript_messages(task_id, filename)
+                body = json.dumps(messages).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        elif path.startswith('/api/diff/'):
+            sha = path.split('/')[-1]
+            # Validate SHA is hex only (prevent command injection)
+            if not re.fullmatch(r'[0-9a-fA-F]{6,40}', sha):
+                self.send_response(400)
+                self.end_headers()
+                return
+            if not self.code_repo:
+                self.send_response(500)
+                body = b'Code repo not resolved'
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', f'{sha}~1..{sha}'],
+                    cwd=self.code_repo,
+                    capture_output=True, text=True, timeout=30,
+                )
+                diff_text = result.stdout if result.returncode == 0 else f"git diff failed: {result.stderr}"
+            except Exception as exc:
+                diff_text = f"Error running git diff: {exc}"
+            body = diff_text.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         else:
             self.send_response(404)
@@ -1913,10 +2669,39 @@ def main(argv=None):
     config = load_config()
     header_bg = config.get("viewer_color", "#111827")
 
+    # Resolve code repo path and GitHub URL
+    code_repo = ""
+    github_repo_url = ""
+    try:
+        code_repo = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        pass
+    if code_repo:
+        try:
+            remote_url = subprocess.run(
+                ['git', 'remote', 'get-url', 'origin'],
+                cwd=code_repo, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            # Convert git@github.com:user/repo.git or https://github.com/user/repo.git to https URL
+            m = re.match(r'git@github\.com:(.+?)(?:\.git)?$', remote_url)
+            if m:
+                github_repo_url = f'https://github.com/{m.group(1)}'
+            else:
+                m = re.match(r'https://github\.com/(.+?)(?:\.git)?$', remote_url)
+                if m:
+                    github_repo_url = f'https://github.com/{m.group(1)}'
+        except Exception:
+            pass
+
     # Configure handler with dynamic values
     Handler.page_title = page_title
     Handler.header_bg = header_bg
     Handler.favicon_svg = _build_favicon_svg(header_bg)
+    Handler.code_repo = code_repo
+    Handler.github_repo_url = github_repo_url
 
     server = HTTPServer(('127.0.0.1', port), Handler)
     url    = f'http://localhost:{port}'

@@ -27,7 +27,7 @@ REQUIRED_FIELDS = {
 OPTIONAL_FIELDS = {
     "model", "thinking",
     "design_references", "produces", "context_files",
-    "result", "task_children", "task_parent",
+    "result", "task_children", "task_parent", "merge_sha",
 }
 
 ALL_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
@@ -161,7 +161,7 @@ def validate_task_shape(task: dict) -> list[str]:
                 errors.append(f"'{field}' must contain only strings")
 
     # Nullable string fields
-    for field in ("result", "task_parent"):
+    for field in ("result", "task_parent", "merge_sha"):
         if field in task and task[field] is not None and not isinstance(task[field], str):
             errors.append(f"'{field}' must be a string or null, got {type(task[field]).__name__}")
 
