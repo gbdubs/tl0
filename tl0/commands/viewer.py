@@ -2540,10 +2540,12 @@ class Handler(BaseHTTPRequestHandler):
                 t["completed_at"]  = task_completed_at(t)
                 t["created_at"]    = task_created_at(t)
                 t["updated_at"]    = task_updated_at(t)
-                t["tasks_created"] = t.get("task_children", [])
-                t["parent_task"]   = t.get("task_parent")
-                t["source"]        = t.get("task_parent") or "human"
+                t["parent_task"]   = t.get("created_by")
+                t["source"]        = t.get("created_by") or "human"
                 tasks.append(t)
+            # Derive tasks_created by scanning created_by references
+            for t in tasks:
+                t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
             body  = json.dumps(tasks).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')

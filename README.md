@@ -2,7 +2,7 @@
 
 Task coordination system for parallel AI agents.
 
-tl0 manages a tree+DAG of tasks stored as git-backed JSON files. Multiple agents can claim, implement, and complete tasks concurrently with atomic claiming and automatic conflict resolution.
+tl0 manages a DAG of tasks stored as git-backed JSON files. Multiple agents can claim, implement, and complete tasks concurrently with atomic claiming and automatic conflict resolution.
 
 ## Install
 
@@ -51,11 +51,11 @@ tl0h supervisor              # Manage parallel task loops
 
 ## Task Model
 
-Tasks form a **tree** (via `task_parent`) and a **DAG** (via `blocked_by`):
+Tasks have two relationship types:
 
-- **Tree**: Parent tasks decompose into children. A parent is done when all children are done.
-- **DAG**: `blocked_by` captures ordering constraints. A task is claimable only when all blockers are done.
-- **Leaf tasks**: Tasks with no children — only these get implemented.
+- **`blocked_by`** — a DAG of scheduling constraints. A task is claimable only when all blockers are done.
+- **`created_by`** — provenance tracking. Records which task created this one (null if human-created).
+- **Leaf tasks**: Tasks that haven't spawned other tasks — only these get implemented.
 
 ### Lifecycle
 
@@ -146,8 +146,7 @@ Tasks are JSON files with these core fields:
 | `tags` | yes | Freeform labels (`category:value`) |
 | `model` | no | AI model to use |
 | `thinking` | no | Extended thinking mode |
-| `task_parent` | no | Parent task UUID |
-| `task_children` | no | Child task UUIDs |
+| `created_by` | no | UUID of task that created this one |
 | `produces` | no | File paths created/modified |
 | `context_files` | no | Files to read before starting |
 | `design_references` | no | Design doc references |

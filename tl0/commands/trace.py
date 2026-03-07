@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None):
 
     task = matches[0]
 
-    # Walk the task_parent chain
+    # Walk the created_by chain
     chain = []
     seen = set()
     current = task
@@ -39,18 +39,18 @@ def main(argv: list[str] | None = None):
         chain.append({"id": current["id"], "title": current["title"]})
         seen.add(current["id"])
 
-        parent = current.get("task_parent")
-        if not parent:
+        creator = current.get("created_by")
+        if not creator:
             break
 
-        if parent in seen:
-            chain.append({"error": f"cycle detected at {parent}"})
+        if creator in seen:
+            chain.append({"error": f"cycle detected at {creator}"})
             break
-        if parent not in tasks_by_id:
-            chain.append({"error": f"parent task {parent} not found"})
+        if creator not in tasks_by_id:
+            chain.append({"error": f"creator task {creator} not found"})
             break
 
-        current = tasks_by_id[parent]
+        current = tasks_by_id[creator]
 
     if args.as_json:
         print(json.dumps(chain, indent=2))
@@ -62,5 +62,5 @@ def main(argv: list[str] | None = None):
             prefix = "→ " if i > 0 else ""
             indent = "  " * i
             is_root = (i == len(chain) - 1 and not entry.get("error"))
-            root_label = "  (root — no parent)" if is_root and not current.get("task_parent") else ""
+            root_label = "  (root — no creator)" if is_root and not current.get("created_by") else ""
             print(f"  {indent}{prefix}{entry['id'][:8]}  {entry['title']}{root_label}")

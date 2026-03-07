@@ -21,11 +21,11 @@ def main(argv: list[str] | None = None):
     tasks_list = load_all_tasks()
     tasks = {t["id"]: t for t in tasks_list}
 
-    # Build set of parent IDs (tasks that have children)
+    # Build set of creator IDs (tasks that have spawned other tasks)
     parent_ids = set()
     for task in tasks.values():
-        if task.get("task_parent"):
-            parent_ids.add(task["task_parent"])
+        if task.get("created_by"):
+            parent_ids.add(task["created_by"])
 
     reset_count = 0
     skip_not_done = 0

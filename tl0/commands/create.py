@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--design-refs", default="", help="Comma-separated file:section:note")
     parser.add_argument("--produces", default="", help="Comma-separated file paths")
     parser.add_argument("--context-files", default="", help="Comma-separated file paths")
-    parser.add_argument("--parent", default=None, help="Parent task UUID (prefix OK). Also auto-detected from TL0_TASK_ID env var.")
+    parser.add_argument("--parent", default=None, help="Creator task UUID (prefix OK). Also auto-detected from TL0_TASK_ID env var.")
 
     args = parser.parse_args(argv)
 
@@ -44,13 +44,13 @@ def main(argv: list[str] | None = None):
     if args.model and VALID_MODELS and args.model not in VALID_MODELS:
         parser.error(f"model must be one of {sorted(VALID_MODELS)}, got '{args.model}'")
 
-    # Resolve parent: explicit flag > TL0_TASK_ID env var > None
-    parent_id = None
+    # Resolve creator: explicit flag > TL0_TASK_ID env var > None
+    created_by = None
     if args.parent:
-        parent = load_task(args.parent)
-        parent_id = parent["id"]
+        creator = load_task(args.parent)
+        created_by = creator["id"]
     elif os.environ.get("TL0_TASK_ID"):
-        parent_id = os.environ["TL0_TASK_ID"]
+        created_by = os.environ["TL0_TASK_ID"]
 
     task_id = str(uuid.uuid4())
 
@@ -67,18 +67,10 @@ def main(argv: list[str] | None = None):
         "produces": [x.strip() for x in args.produces.split(",") if x.strip()],
         "context_files": [x.strip() for x in args.context_files.split(",") if x.strip()],
         "result": None,
-        "task_children": [],
-        "task_parent": parent_id,
+        "created_by": created_by,
     }
 
     save_task(task)
-
-    # Update parent's task_children
-    if parent_id:
-        parent = load_task(parent_id)
-        if task_id not in parent.get("task_children", []):
-            parent.setdefault("task_children", []).append(task_id)
-            save_task(parent)
 
     git_commit(f"create: {args.title}")
     print(json.dumps({"id": task_id, "title": args.title}, indent=2))

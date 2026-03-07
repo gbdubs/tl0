@@ -6,13 +6,13 @@ This project uses tl0 to coordinate work across parallel agents. Task data lives
 
 **The project is in EXECUTION mode.** Agents claim leaf tasks and implement them — writing code, tests, and marking tasks done with a summary of what was built.
 
-## How the Task Tree Works
+## How Tasks Are Structured
 
-Tasks form a **tree** via `task_parent`, and a **DAG** via `blocked_by`.
+Tasks have two relationship types:
 
-- **`task_parent`** means "I am a part of this larger task." A parent is done when ALL its children are done.
-- **`blocked_by`** means "I cannot start until these other tasks are done." This captures ordering constraints across the tree.
-- A task with **no children** is a **leaf task**. Only leaf tasks get implemented.
+- **`blocked_by`** — "I cannot start until these other tasks are done." This is a DAG that controls scheduling.
+- **`created_by`** — "This task was created by another task." Tracks provenance/lineage.
+- A task that has not spawned other tasks is a **leaf task**. Only leaf tasks get implemented.
 
 ### Task Lifecycle
 
@@ -45,7 +45,7 @@ tl0m claim {uuid} {agent-id}          # Claim a task
 tl0m show                             # Show current task (uses TL0_TASK_ID)
 tl0m show {uuid-prefix}               # Show a specific task
 tl0m done --result "..."              # Complete current task
-tl0m done --result "..." --created "uuid1,uuid2"  # Complete + link child tasks
+tl0m done --result "..."              # Complete current task
 tl0m create --title "..." --description "..." --tags 'a,b' --blocked-by 'uuid1' --parent 'uuid'
 tl0m update {uuid} --add-blocked-by {uuid}  # Update fields
 ```

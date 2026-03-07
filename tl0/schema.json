@@ -98,15 +98,10 @@
       "type": ["string", "null"],
       "description": "Summary of what happened when completed. Set when a done event is appended."
     },
-    "task_children": {
-      "type": "array",
-      "items": { "type": "string", "format": "uuid" },
-      "description": "IDs of child tasks this task produced."
-    },
-    "task_parent": {
+    "created_by": {
       "type": ["string", "null"],
       "format": "uuid",
-      "description": "ID of the task that spawned this one. Null if created directly by a human."
+      "description": "ID of the task that created this one. Null if created directly by a human."
     },
     "merge_sha": {
       "type": ["string", "null"],

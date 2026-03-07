@@ -7,8 +7,8 @@ from pathlib import Path
 from tl0.common import TASKS_DIR, TASKS_FOLDER, SCHEMA_PATH, load_all_tasks, save_task, task_status, VALID_MODELS
 
 # Fields that hold UUID references to other tasks
-_REF_LIST_FIELDS = ("blocked_by", "task_children")
-_REF_SCALAR_FIELDS = ("task_parent",)
+_REF_LIST_FIELDS = ("blocked_by",)
+_REF_SCALAR_FIELDS = ("created_by",)
 
 
 def resolve_truncated_ref(ref: str, all_ids: set) -> str | None:
@@ -87,15 +87,10 @@ def validate_task(task: dict, schema: dict, all_ids: set) -> list[str]:
         if bid not in all_ids:
             errors.append(f"{tid}: blocked_by references non-existent task {bid}")
 
-    # Check task_parent reference exists
-    parent = task.get("task_parent")
-    if parent and parent not in all_ids:
-        errors.append(f"{tid}: task_parent references non-existent task {parent}")
-
-    # Check task_children references exist
-    for cid in task.get("task_children", []):
-        if cid not in all_ids:
-            errors.append(f"{tid}: task_children references non-existent task {cid}")
+    # Check created_by reference exists
+    creator = task.get("created_by")
+    if creator and creator not in all_ids:
+        errors.append(f"{tid}: created_by references non-existent task {creator}")
 
     # Check no unexpected fields
     allowed = set(schema.get("properties", {}).keys())

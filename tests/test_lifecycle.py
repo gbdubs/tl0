@@ -86,32 +86,25 @@ class TestTaskLifecycle:
         )
         assert blockers_done
 
-    def test_parent_child_linking(self, tasks_dir, make_task):
-        parent = make_task(title="Parent task")
-        child = make_task(title="Child task", task_parent=parent["id"])
-
-        # Update parent's task_children
-        parent["task_children"] = [child["id"]]
-        save_task(parent)
-
-        loaded_parent = load_task(parent["id"])
-        assert child["id"] in loaded_parent["task_children"]
+    def test_created_by_linking(self, tasks_dir, make_task):
+        creator = make_task(title="Creator task")
+        child = make_task(title="Child task", created_by=creator["id"])
 
         loaded_child = load_task(child["id"])
-        assert loaded_child["task_parent"] == parent["id"]
+        assert loaded_child["created_by"] == creator["id"]
 
 
-class TestTaskParent:
-    def test_default_parent_is_none(self, tasks_dir, make_task):
+class TestCreatedBy:
+    def test_default_created_by_is_none(self, tasks_dir, make_task):
         task = make_task(title="Human task")
         loaded = load_task(task["id"])
-        assert loaded["task_parent"] is None
+        assert loaded["created_by"] is None
 
-    def test_parent_from_task(self, tasks_dir, make_task):
-        parent = make_task(title="Parent task")
-        child = make_task(title="Child task", task_parent=parent["id"])
+    def test_created_by_from_task(self, tasks_dir, make_task):
+        creator = make_task(title="Creator task")
+        child = make_task(title="Child task", created_by=creator["id"])
         loaded = load_task(child["id"])
-        assert loaded["task_parent"] == parent["id"]
+        assert loaded["created_by"] == creator["id"]
 
     def test_trace_root_task(self, tasks_dir, make_task):
         from tl0.commands.trace import main as trace_main
@@ -125,7 +118,7 @@ class TestTaskParent:
         chain = json.loads(f.getvalue())
         assert len(chain) == 1
         assert chain[0]["id"] == task["id"]
-        assert "task_parent" not in chain[0]
+        assert "created_by" not in chain[0]
 
     def test_trace_chain(self, tasks_dir, make_task):
         from tl0.commands.trace import main as trace_main
@@ -133,8 +126,8 @@ class TestTaskParent:
         from contextlib import redirect_stdout
 
         root = make_task(title="Root task")
-        mid = make_task(title="Mid task", task_parent=root["id"])
-        leaf = make_task(title="Leaf task", task_parent=mid["id"])
+        mid = make_task(title="Mid task", created_by=root["id"])
+        leaf = make_task(title="Leaf task", created_by=mid["id"])
 
         f = io.StringIO()
         with redirect_stdout(f):
@@ -145,12 +138,12 @@ class TestTaskParent:
         assert chain[1]["id"] == mid["id"]
         assert chain[2]["id"] == root["id"]
 
-    def test_trace_missing_parent_task(self, tasks_dir, make_task):
+    def test_trace_missing_creator(self, tasks_dir, make_task):
         from tl0.commands.trace import main as trace_main
         import io
         from contextlib import redirect_stdout
 
-        task = make_task(title="Orphan", task_parent="00000000-0000-0000-0000-000000000000")
+        task = make_task(title="Orphan", created_by="00000000-0000-0000-0000-000000000000")
         f = io.StringIO()
         with redirect_stdout(f):
             trace_main([task["id"], "--json"])
