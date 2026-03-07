@@ -414,8 +414,8 @@ run_task() {
   local task_id model thinking title description short_id branch worktree task_start_time
 
   task_id=$(echo "$task_json"     | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
-  model=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('model', 'sonnet'))")
-  thinking=$(echo "$task_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking', False))")
+  model=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('model') or 'sonnet')")
+  thinking=$(echo "$task_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking') or False)")
   title=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['title'][:60])")
   description=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('description', ''))")
   task_start_time=$(date +%s)
