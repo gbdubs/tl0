@@ -71,10 +71,25 @@ The outer loop reads this file to determine success. If the file does not exist 
 Do NOT call `tl0m done` yourself. The outer loop handles that.
 Do NOT commit `.task-result.txt`.
 
+## If a task cannot proceed due to upstream failure
+
+If you cannot do this task because a prerequisite task failed or was never completed (e.g., required files were never created, an earlier pipeline stage broke), signal this explicitly by writing `.task-failed.txt`:
+
+```bash
+echo "Cannot proceed: upstream task <id> failed because <reason>. <what is missing>." > .task-failed.txt
+```
+
+This is different from a normal result:
+- `.task-result.txt` → task succeeded; the loop merges your work and marks it done.
+- `.task-failed.txt` → task failed (unrecoverable); the loop marks it failed with your reason and no merge happens.
+
+Do NOT write both files. Do NOT commit when failing — there is nothing to merge.
+
 ## If stuck
 
 1. Re-read the task description and related completed tasks
-2. If truly stuck, write what went wrong to `.task-result.txt` and stop
+2. If truly stuck on something fixable, keep trying or write `.task-result.txt` describing partial progress
+3. If the task is fundamentally blocked by something broken upstream, write `.task-failed.txt` and stop
 
 ## Rules
 
@@ -82,4 +97,4 @@ Do NOT commit `.task-result.txt`.
 - Every implementation needs tests.
 - Commit your work before writing the result summary.
 - If the task is too big, decompose instead of implementing.
-- Never call `tl0m done` — the loop owns that.
+- Never call `tl0m done` or `tl0m fail` — the loop owns those.

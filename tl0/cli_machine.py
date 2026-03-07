@@ -11,7 +11,7 @@ import sys
 
 # Commands that require TL0_TASK_ID to be set.
 # find/claim/show/update are exempt: they operate on arbitrary tasks, not the current one.
-_TASK_CONTEXT_COMMANDS = {"create", "done", "complete", "free", "release"}
+_TASK_CONTEXT_COMMANDS = {"create", "done", "complete", "free", "release", "fail"}
 
 
 def _require_task_id(cmd: str):
@@ -56,6 +56,9 @@ def main():
     sub.add_parser("free", help="Release the current task back to pending")
     sub.add_parser("release", help="Alias for free")
 
+    # fail — requires TL0_TASK_ID; task ID defaults to TL0_TASK_ID
+    sub.add_parser("fail", help="Mark the current task as failed (unrecoverable; different from done)")
+
     args, remaining = parser.parse_known_args()
 
     if args.command is None:
@@ -91,6 +94,10 @@ def main():
 
     elif cmd in ("free", "release"):
         from tl0.commands.free import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("fail",):
+        from tl0.commands.fail import main as cmd_main
         cmd_main(remaining)
 
     else:

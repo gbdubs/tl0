@@ -745,6 +745,21 @@ if text_parts:
 " 2>/dev/null || true)
   fi
 
+  # --- Check for explicit failure signal ---
+  if [ -f "$worktree/.task-failed.txt" ]; then
+    local failure_reason
+    failure_reason=$(cat "$worktree/.task-failed.txt")
+    log "    Task signaled failure: $failure_reason"
+    write_status "failed" "$task_id" "$title"
+    tl0m fail --reason "$failure_reason" 2>/dev/null \
+      || warn "Failed to mark task as failed. May need manual intervention."
+    cleanup_worktree "$short_id"
+    log "Task $short_id failed (upstream/unrecoverable). Transcripts in $TASK_TRANSCRIPT_DIR/"
+    TASK_TRANSCRIPT_DIR=""
+    TASK_SESSION_ID=""
+    return 0
+  fi
+
   # --- Read result summary ---
   local result_text=""
   if [ -f "$worktree/.task-result.txt" ]; then

@@ -123,6 +123,9 @@ def main():
     # reset-quota-errors
     sub.add_parser("reset-quota-errors", help="Reset tasks erroneously completed due to quota/rate-limit errors")
 
+    # reset-failed
+    sub.add_parser("reset-failed", help="Reset failed tasks back to pending so they can be retried")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
 
@@ -202,6 +205,10 @@ def main():
 
     elif cmd in ("reset-quota-errors",):
         from tl0.commands.reset_quota_errors import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("reset-failed",):
+        from tl0.commands.reset_failed import main as cmd_main
         cmd_main(remaining)
 
     else:

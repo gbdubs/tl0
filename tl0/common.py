@@ -17,7 +17,7 @@ TASKS_FOLDER = TASKS_DIR / "tasks"
 TRANSCRIPTS_FOLDER = TASKS_DIR / "transcripts"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.json"
 
-VALID_STATUSES = {"pending", "claimed", "done"}
+VALID_STATUSES = {"pending", "claimed", "done", "failed"}
 VALID_MODELS = set(_config.get("valid_models", ["opus", "sonnet", "haiku"]))
 
 REQUIRED_FIELDS = {
@@ -28,11 +28,12 @@ OPTIONAL_FIELDS = {
     "model", "thinking",
     "design_references", "produces", "context_files",
     "result", "created_by", "merge_sha",
+    "failure_reason",
 }
 
 ALL_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 
-VALID_EVENT_TYPES = {"created", "claimed", "freed", "done"}
+VALID_EVENT_TYPES = {"created", "claimed", "freed", "done", "failed"}
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ VALID_EVENT_TYPES = {"created", "claimed", "freed", "done"}
 # ---------------------------------------------------------------------------
 
 def task_status(task: dict) -> str:
-    """Derive status from the task's event log. Returns 'pending', 'claimed', or 'done'.
+    """Derive status from the task's event log. Returns 'pending', 'claimed', 'done', or 'failed'.
 
     The 'created' event is skipped — only lifecycle events determine status.
     """
@@ -49,6 +50,8 @@ def task_status(task: dict) -> str:
             return "claimed"
         if event["type"] == "done":
             return "done"
+        if event["type"] == "failed":
+            return "failed"
         if event["type"] == "freed":
             return "pending"
         # skip "created"
@@ -161,7 +164,7 @@ def validate_task_shape(task: dict) -> list[str]:
                 errors.append(f"'{field}' must contain only strings")
 
     # Nullable string fields
-    for field in ("result", "created_by", "merge_sha"):
+    for field in ("result", "created_by", "merge_sha", "failure_reason"):
         if field in task and task[field] is not None and not isinstance(task[field], str):
             errors.append(f"'{field}' must be a string or null, got {type(task[field]).__name__}")
 
@@ -180,6 +183,8 @@ def validate_task_shape(task: dict) -> list[str]:
     if "events" in task and isinstance(task["events"], list):
         if task_status(task) == "done" and not task.get("result"):
             errors.append("Last event is 'done' but 'result' is not set")
+        if task_status(task) == "failed" and not task.get("failure_reason"):
+            errors.append("Last event is 'failed' but 'failure_reason' is not set")
 
     return errors
 
