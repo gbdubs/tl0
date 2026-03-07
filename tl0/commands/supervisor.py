@@ -29,8 +29,10 @@ from tl0.common import (
     load_all_tasks, load_task, save_task, validate_task_shape,
     now_iso, git_commit, VALID_MODELS,
     task_status, task_claimed_by, task_last_claimed_at, task_completed_at, task_created_at,
+    task_updated_at, TRANSCRIPTS_FOLDER,
 )
 from tl0.config import load_config
+from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -538,6 +540,7 @@ tr:last-child td { border-bottom: none; }
   <div id="header">
     <h1>{{PAGE_TITLE}}</h1>
     <span class="stats" id="stats"></span>
+    <a href="/viewer/" style="color:white; text-decoration:none; font-size:12px; padding:4px 10px; border:1px solid rgba(255,255,255,0.3); border-radius:6px; font-weight:500;">Viewer →</a>
   </div>
 
   <div class="content">
@@ -554,6 +557,7 @@ tr:last-child td { border-bottom: none; }
         <div class="spacer"></div>
         <button class="btn btn-warn" id="btn-drain" title="Stop spawning new loops; kill idle ones; let executing loops finish">Drain</button>
         <button class="btn btn-danger" id="btn-kill" title="Kill all loops immediately">Kill All</button>
+        <button class="btn btn-sm" id="btn-free-all" title="Free all claimed tasks back to pending">Free All</button>
       </div>
     </div>
 
@@ -806,8 +810,16 @@ document.getElementById('btn-drain').onclick = async () => {
   await apiPost('/api/drain');
 };
 document.getElementById('btn-kill').onclick = async () => {
-  if (!confirm('Kill all running loops immediately?\n\nTasks in progress will be left in claimed/in-progress state.\nUse "tl0h free-all" to reset them.')) return;
+  if (!confirm('Kill all running loops immediately?\n\nTasks in progress will be left in claimed/in-progress state.\nUse "Free All" button to reset them.')) return;
   await apiPost('/api/kill-all');
+};
+document.getElementById('btn-free-all').onclick = async () => {
+  if (!confirm('Free all claimed tasks back to pending?')) return;
+  const res = await apiPost('/api/free-all');
+  if (res && res.freed !== undefined) {
+    alert('Freed ' + res.freed + ' task(s).');
+  }
+  refreshTasks();
 };
 document.getElementById('log-close').onclick = closeLogs;
 document.getElementById('log-overlay').onclick = (e) => {
@@ -1005,6 +1017,9 @@ class SupervisorHandler(BaseHTTPRequestHandler):
     page_title: str = "tl0 Supervisor"
     header_bg: str = "#1e3a5f"
     favicon_svg: str = ""
+    viewer_page_title: str = "tl0 Task Viewer"
+    viewer_header_bg: str = "#111827"
+    viewer_favicon_svg: str = ""
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -1043,6 +1058,55 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
 
+        # ── Embedded viewer routes ──
+        elif path in ('/viewer', '/viewer/', '/viewer/index.html'):
+            rendered = VIEWER_HTML \
+                .replace('{{PAGE_TITLE}}', html.escape(self.viewer_page_title)) \
+                .replace('{{HEADER_BG}}', self.viewer_header_bg) \
+                .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
+                .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
+                .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
+                .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'")
+            # Inject a nav link back to the supervisor
+            rendered = rendered.replace(
+                '<button id="refresh-btn"',
+                '<a href="/" style="color:#e5e7eb; text-decoration:none; font-size:11px; padding:4px 10px; border:1px solid #4b5563; border-radius:5px; font-weight:500; background:#374151;">← Supervisor</a>\n  <button id="refresh-btn"',
+                1,
+            )
+            self._respond(200, rendered, 'text/html')
+
+        elif path == '/viewer/favicon.svg':
+            self._respond(200, self.viewer_favicon_svg, 'image/svg+xml')
+
+        elif path == '/viewer/api/tasks':
+            raw = load_all_tasks()
+            tasks = []
+            for t in raw:
+                t = dict(t)
+                t["status"]        = task_status(t)
+                t["claimed_by"]    = task_claimed_by(t)
+                t["claimed_at"]    = task_last_claimed_at(t)
+                t["completed_at"]  = task_completed_at(t)
+                t["created_at"]    = task_created_at(t)
+                t["updated_at"]    = task_updated_at(t)
+                t["tasks_created"] = t.get("task_children", [])
+                t["parent_task"]   = t.get("task_parent")
+                tasks.append(t)
+            self._respond_json(tasks)
+
+        elif path.startswith('/viewer/api/transcripts/'):
+            task_id = path.split('/')[-1]
+            self._respond_json(_build_transcript_summary(task_id))
+
+        elif path.startswith('/viewer/api/loop-log/'):
+            task_id = path.split('/')[-1]
+            log_path = TRANSCRIPTS_FOLDER / task_id / 'loop.log'
+            if log_path.exists():
+                self._respond(200, log_path.read_text(), 'text/plain')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -1065,6 +1129,22 @@ class SupervisorHandler(BaseHTTPRequestHandler):
         elif path == '/api/drain':
             self.state.drain()
             self._respond_json({"ok": True})
+
+        elif path == '/api/free-all':
+            try:
+                from tl0.common import load_all_tasks, save_task, task_status, task_claimed_by, now_iso, git_commit
+                tasks = load_all_tasks()
+                freed = []
+                for task in tasks:
+                    if task_status(task) == "claimed":
+                        task["events"].append({"type": "freed", "at": now_iso()})
+                        save_task(task)
+                        freed.append(task["id"])
+                if freed:
+                    git_commit(f"free-all: released {len(freed)} tasks back to pending")
+                self._respond_json({"ok": True, "freed": len(freed)})
+            except Exception as e:
+                self._respond_error(500, str(e))
 
         elif path == '/api/tasks/create':
             try:
@@ -1182,6 +1262,11 @@ def main(argv=None):
     SupervisorHandler.header_bg = header_bg
     SupervisorHandler.favicon_svg = _build_favicon_svg(header_bg)
 
+    viewer_bg = config.get("viewer_color", "#111827")
+    SupervisorHandler.viewer_page_title = f"{Path.cwd().name} — tl0 Task Viewer"
+    SupervisorHandler.viewer_header_bg = viewer_bg
+    SupervisorHandler.viewer_favicon_svg = _build_viewer_favicon(viewer_bg)
+
     server = HTTPServer(('127.0.0.1', port), SupervisorHandler)
     url = f'http://localhost:{port}'
 
@@ -1189,6 +1274,7 @@ def main(argv=None):
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
     print(f'Supervisor -> {url}  (Ctrl+C to stop)')
+    print(f'Viewer     -> {url}/viewer/')
     if base_loop_args:
         print(f'  Loop args: {" ".join(base_loop_args)}')
     print(f'  Initial parallelism: {args.parallelism}')
