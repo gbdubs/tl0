@@ -320,7 +320,7 @@ body {
 }
 .d-label:hover { background: #f9fafb; }
 .d-label::after {
-  content: '▾'; font-size: 11px; color: #9ca3af; transition: transform 0.15s;
+  content: '▼'; font-size: 11px; color: #9ca3af; transition: transform 0.15s;
 }
 .d-section.collapsed .d-label::after { transform: rotate(-90deg); }
 .d-section.collapsed .d-label { margin-bottom: 0; }
@@ -416,7 +416,7 @@ body {
 .event-by { color: var(--text-muted); font-size: 11px; font-family: monospace; }
 
 /* ── Execution summary ────────────────────────────────────── */
-.exec-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.exec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-bottom: 10px; }
 .exec-stat label { display: block; font-size: 10px; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
 .exec-stat value { display: block; font-size: 13px; font-weight: 500; }
 .exec-tools { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -458,10 +458,10 @@ body {
 }
 .log-btn {
   padding: 3px 8px; border-radius: 5px; cursor: pointer;
-  background: #374151; border: 1px solid #4b5563; color: #e5e7eb;
+  background: transparent; border: 1px solid var(--border); color: var(--text);
   font-size: 11px; transition: background 0.1s;
 }
-.log-btn:hover { background: #4b5563; }
+.log-btn:hover { background: var(--hover-bg, #f3f4f6); }
 
 /* ── Diff viewer ──────────────────────────────────────────── */
 .diff-panel {
@@ -634,16 +634,6 @@ body {
 .exec-invocation { cursor: pointer; transition: background 0.1s; }
 .exec-invocation:hover { background: #eef2ff; }
 
-/* ── Nav buttons ───────────────────────────────────────────── */
-.nav-btn {
-  width: 28px; height: 28px; border-radius: 5px; cursor: pointer;
-  background: #374151; border: 1px solid #4b5563; color: #e5e7eb;
-  font-size: 15px; line-height: 1; display: flex; align-items: center;
-  justify-content: center; transition: background 0.1s; flex-shrink: 0;
-  padding: 0;
-}
-.nav-btn:hover:not(:disabled) { background: #4b5563; }
-.nav-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* ── Search snippets & highlights ──────────────────────────── */
 .t-snippet {
@@ -787,6 +777,14 @@ mark {
   flex-shrink: 0;
 }
 .delete-task-btn:hover { background: #b91c1c; }
+.run-now-btn {
+  padding: 3px 10px; border-radius: 5px; cursor: pointer;
+  background: #2563eb; border: 1px solid #1d4ed8; color: white;
+  font-size: 11px; transition: background 0.1s;
+  flex-shrink: 0;
+}
+.run-now-btn:hover { background: #1d4ed8; }
+.run-now-btn:disabled { background: #93c5fd; border-color: #93c5fd; cursor: not-allowed; }
 
 /* ── Delete confirmation modal ──────────────────────────────── */
 #delete-modal {
@@ -814,12 +812,10 @@ mark {
 
 <div id="header">
   <h1>Digest Task Viewer</h1>
-  <button class="nav-btn" id="nav-back" onclick="history.back()" title="Back (Alt+←)">←</button>
-  <button class="nav-btn" id="nav-fwd"  onclick="history.forward()" title="Forward (Alt+→)">→</button>
   <div id="stats">Loading…</div>
   <button id="refresh-btn" onclick="refresh()">↺ Refresh</button>
   <div id="view-dropdown-wrap">
-    <button id="view-dropdown-btn" onclick="toggleViewDropdown()">View ▾</button>
+    <button id="view-dropdown-btn" onclick="toggleViewDropdown()">View ▼</button>
     <div id="view-dropdown-menu" style="display:none">
       <button id="view-detail-item" onclick="setView('tree'); closeViewDropdown()">Detail</button>
       <button id="view-chart-item" onclick="setView('chart'); closeViewDropdown()">Chart</button>
@@ -882,7 +878,7 @@ mark {
     <div id="table-controls">
       <span class="table-result-count" id="table-result-count"></span>
       <div id="col-picker-wrap">
-        <button id="col-picker-btn" onclick="toggleColPicker()">Columns ▾</button>
+        <button id="col-picker-btn" onclick="toggleColPicker()">Columns ▼</button>
         <div id="col-picker-menu" style="display:none"></div>
       </div>
     </div>
@@ -903,7 +899,7 @@ mark {
 </div>
 <div id="chart-tooltip"></div>
 
-<script>window.__GITHUB_REPO_URL__ = '{{GITHUB_REPO_URL}}';</script>
+<script>window.__GITHUB_REPO_URL__ = '{{GITHUB_REPO_URL}}';window.__SUPERVISOR_ENABLED__ = false;window.__SUPERVISOR_API_BASE__ = '';</script>
 <script>
 // ── State ────────────────────────────────────────────────────
 let allTasks = [];
@@ -1049,6 +1045,31 @@ function schedulePoll() {
   if (_pollTimer) clearTimeout(_pollTimer);
   const hasActive = allTasks.some(t => t.status === 'pending' || t.status === 'claimed' || t.status === 'in-progress');
   if (hasActive) _pollTimer = setTimeout(loadTasks, 30000);
+}
+
+// ── Run task now (one-off via supervisor) ─────────────────────
+async function runTaskNow(taskId) {
+  const btn = document.getElementById('run-now-' + taskId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+  try {
+    const apiBase = window.__SUPERVISOR_API_BASE__ || '';
+    const res = await fetch(apiBase + '/api/run-task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      alert('Failed to run task: ' + (data.error || 'Unknown error'));
+      if (btn) { btn.disabled = false; btn.textContent = 'Run Now'; }
+      return;
+    }
+    if (btn) { btn.textContent = 'Started (' + data.slot_id + ')'; }
+    setTimeout(loadTasks, 3000);
+  } catch (e) {
+    alert('Failed to run task: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Run Now'; }
+  }
 }
 
 // ── Delete task ───────────────────────────────────────────────
@@ -1358,6 +1379,9 @@ function renderExecSection(tx, taskId) {
     const turns = tx.invocations.reduce((s, i) => s + (i.num_turns || 0), 0);
     html += `<div class="exec-stat"><label>Turns</label><value>${turns}</value></div>`;
   }
+  if (tx.has_loop_log) {
+    html += `<div class="exec-stat"><label>Log</label><value><button class="log-btn" onclick="event.stopPropagation();showLoopLog('${taskId}')">View Loop Log</button></value></div>`;
+  }
   html += '</div>';
   // Invocations detail
   if (tx.invocations) {
@@ -1425,7 +1449,7 @@ function renderTagFilters() {
     div.className = 'tag-group';
     const header = document.createElement('div');
     header.className = 'tag-group-header';
-    header.innerHTML = `<span class="tag-group-arrow">${isExpanded ? '▾' : '▸'}</span><span>${esc(cat)}</span><span style="font-weight:400;opacity:.5;margin-left:3px">${tags.length}</span>${activeInCat ? `<span style="margin-left:auto;font-size:9px;background:var(--accent-bg);color:var(--accent);border-radius:8px;padding:0 5px">${activeInCat} active</span>` : ''}`;
+    header.innerHTML = `<span class="tag-group-arrow">${isExpanded ? '▼' : '▶'}</span><span>${esc(cat)}</span><span style="font-weight:400;opacity:.5;margin-left:3px">${tags.length}</span>${activeInCat ? `<span style="margin-left:auto;font-size:9px;background:var(--accent-bg);color:var(--accent);border-radius:8px;padding:0 5px">${activeInCat} active</span>` : ''}`;
     header.onclick = () => toggleTagCategory(cat);
     div.appendChild(header);
     if (isExpanded) {
@@ -1901,6 +1925,9 @@ function renderDetail(id) {
     html += `<span class="d-badge" style="cursor:pointer" onclick="jumpToTag('${escAttr(tag)}')" title="Filter by this tag">${esc(tag)}</span>`;
   });
   html += `<span style="font-size:11px;color:var(--text-muted);font-family:monospace">${task.id}</span>`;
+  if (window.__SUPERVISOR_ENABLED__ && task.status === 'pending' && openBlockers.length === 0) {
+    html += `<button class="run-now-btn" id="run-now-${escAttr(task.id)}" onclick="runTaskNow('${escAttr(task.id)}')">Run Now</button>`;
+  }
   html += `<button class="delete-task-btn" onclick="confirmDelete('${escAttr(task.id)}')">Delete</button>`;
   html += `</div>`;
 
@@ -1953,9 +1980,7 @@ function renderDetail(id) {
     fetchTranscript(task.id).then(tx => {
       const el = document.getElementById('exec-section-' + task.id.slice(0,8));
       if (!el || !tx || !tx.has_transcript) return;
-      let s = '<div class="d-section"><div class="d-label" onclick="toggleSection(this)" style="display:flex;align-items:center;justify-content:space-between"><span>Execution</span>';
-      if (tx.has_loop_log) s += ` <button class="log-btn" onclick="event.stopPropagation();showLoopLog(\'${task.id}\')">View Loop Log</button>`;
-      s += '</div>';
+      let s = '<div class="d-section"><div class="d-label" onclick="toggleSection(this)"><span>Execution</span></div>';
       s += '<div class="d-section-body">';
       if (taskEvents) s += renderEventTimeline(taskEvents);
       s += renderExecSection(tx, task.id);
@@ -2384,8 +2409,8 @@ const TABLE_COLUMNS = [
   { key: 'duration',         label: 'Duration',        type: 'num',    default: true },
   { key: 'cost',             label: 'Cost',            type: 'num',    default: true },
   { key: 'turns',            label: 'Turns',           type: 'num',    default: true },
-  { key: 'tool_errors',      label: 'Tool Errors',     type: 'num',    default: false },
-  { key: 'merge_conflicts',  label: 'Merge Conflicts', type: 'num',    default: true },
+  { key: 'tool_errors',      label: 'Tool Errors',     type: 'num',    default: true },
+  { key: 'merge_conflicts',  label: 'Merge Conflicts', type: 'num',    default: false },
   { key: 'Read',             label: 'Read',            type: 'tool',   default: true },
   { key: 'Edit',             label: 'Edit',            type: 'tool',   default: true },
   { key: 'Write',            label: 'Write',           type: 'tool',   default: false },
@@ -2412,7 +2437,7 @@ function _persistCols() {
   localStorage.setItem('tl0_table_cols', JSON.stringify([..._visibleCols]));
 }
 
-const KNOWN_TOOLS = ['Read','Edit','Write','Bash','Glob','Grep','Task','WebFetch'];
+const KNOWN_TOOLS = ['Read','Edit','Write','Bash','Glob','Grep','WebFetch'];
 
 function _getTableVal(task, ts, col) {
   switch (col.key) {
@@ -2430,6 +2455,7 @@ function _getTableVal(task, ts, col) {
     case 'commit':          return task.merge_sha || '';
     case 'completed_at':    return task.completed_at || '';
     case 'tags':            return (task.tags || []).join(', ');
+    case 'Task':            return (task.tasks_created || []).length;
     case 'other_tools': {
       if (!ts || !ts.invocations) return 0;
       let count = 0;
@@ -2620,11 +2646,11 @@ async function renderTable() {
 
 function tableSort(key) {
   if (_tableSort.col === key) {
-    if (_tableSort.dir === 'asc') _tableSort.dir = 'desc';
-    else if (_tableSort.dir === 'desc') { _tableSort.col = null; _tableSort.dir = 'asc'; }
+    if (_tableSort.dir === 'desc') _tableSort.dir = 'asc';
+    else if (_tableSort.dir === 'asc') { _tableSort.col = null; _tableSort.dir = 'desc'; }
   } else {
     _tableSort.col = key;
-    _tableSort.dir = 'asc';
+    _tableSort.dir = 'desc';
   }
   renderTable();
 }
