@@ -862,6 +862,11 @@ if text_parts:
     if [ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]; then
       git -C "$worktree" add -A 2>/dev/null
       git -C "$worktree" reset HEAD .task-result.txt 2>/dev/null || true
+      git -C "$worktree" reset HEAD .task-failed.txt 2>/dev/null || true
+      # Unstage root-level xlsx files (only cases/*/*.xlsx should be committed)
+      git -C "$worktree" diff --cached --name-only -- '*.xlsx' 2>/dev/null \
+        | grep -v '^cases/' \
+        | while IFS= read -r f; do git -C "$worktree" reset HEAD -- "$f" 2>/dev/null; done || true
       git -C "$worktree" commit -m "[task:$short_id] Include uncommitted changes from task execution" 2>/dev/null || true
     fi
   fi
