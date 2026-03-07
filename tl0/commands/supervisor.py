@@ -496,6 +496,7 @@ body {
 .badge-in-progress { background: #fef3c7; color: #92400e; }
 .badge-done       { background: #d1fae5; color: #065f46; }
 .badge-stuck      { background: #fee2e2; color: #991b1b; }
+.badge-failed     { background: #fecaca; color: #7f1d1d; }
 
 /* Phase badges */
 .phase {
@@ -513,6 +514,7 @@ body {
 .phase-merging   { background: #d1fae5; color: #065f46; }
 .phase-quota_rejected { background: #fee2e2; color: #991b1b; }
 .phase-quota_backoff  { background: #fee2e2; color: #991b1b; }
+.phase-failed         { background: #fecaca; color: #7f1d1d; }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; }
@@ -720,6 +722,7 @@ tr:last-child td { border-bottom: none; }
         <button class="btn btn-warn" id="btn-drain" title="Stop spawning new loops; kill idle ones; let executing loops finish">Drain</button>
         <button class="btn btn-danger" id="btn-kill" title="Kill all loops immediately">Kill All</button>
         <button class="btn btn-sm" id="btn-free-all" title="Free all claimed tasks back to pending">Free All</button>
+        <button class="btn btn-sm" id="btn-reset-failed" title="Reset failed tasks back to pending so they can be retried" style="display:none">Reset Failed</button>
       </div>
     </div>
 
@@ -919,7 +922,7 @@ function render() {
 
 function renderTaskSummary() {
   const el = document.getElementById('task-summary');
-  const order = ['pending', 'claimed', 'in-progress', 'done', 'stuck'];
+  const order = ['pending', 'claimed', 'in-progress', 'done', 'failed', 'stuck'];
   const parts = [];
   for (const s of order) {
     const n = taskCounts[s] || 0;
@@ -928,6 +931,11 @@ function renderTaskSummary() {
     }
   }
   el.innerHTML = parts.length ? parts.join('') : '<span class="empty-state">No tasks</span>';
+  // Show Reset Failed button only when there are failed tasks
+  const resetFailedBtn = document.getElementById('btn-reset-failed');
+  if (resetFailedBtn) {
+    resetFailedBtn.style.display = (taskCounts['failed'] || 0) > 0 ? '' : 'none';
+  }
 }
 
 async function refreshTasks() {
@@ -986,6 +994,15 @@ document.getElementById('btn-free-all').onclick = async () => {
   const res = await apiPost('/api/free-all');
   if (res && res.freed !== undefined) {
     alert('Freed ' + res.freed + ' task(s).');
+  }
+  refreshTasks();
+};
+document.getElementById('btn-reset-failed').onclick = async () => {
+  if (!confirm('Reset all failed tasks back to pending so they can be retried?\n\nThis clears failure reasons. Use this after fixing the underlying issue.')) return;
+  const res = await fetch('/api/reset-failed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await res.json();
+  if (data.reset !== undefined) {
+    alert('Reset ' + data.reset + ' failed task(s) back to pending.');
   }
   refreshTasks();
 };
@@ -1438,6 +1455,27 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 if freed:
                     git_commit(f"free-all: released {len(freed)} tasks back to pending")
                 self._respond_json({"ok": True, "freed": len(freed)})
+            except Exception as e:
+                self._respond_error(500, str(e))
+
+        elif path == '/api/reset-failed':
+            try:
+                from tl0.common import load_all_tasks, save_task, task_status, now_iso, git_commit
+                tasks = load_all_tasks()
+                reset = []
+                for task in tasks:
+                    if task_status(task) == "failed":
+                        # Remove the failed event and the preceding claimed event
+                        while task["events"] and task["events"][-1]["type"] == "failed":
+                            task["events"].pop()
+                        while task["events"] and task["events"][-1]["type"] == "claimed":
+                            task["events"].pop()
+                        task["failure_reason"] = None
+                        save_task(task)
+                        reset.append(task["id"])
+                if reset:
+                    git_commit(f"reset-failed: {len(reset)} tasks reset to pending")
+                self._respond_json({"ok": True, "reset": len(reset)})
             except Exception as e:
                 self._respond_error(500, str(e))
 

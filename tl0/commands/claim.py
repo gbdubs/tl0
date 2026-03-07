@@ -24,9 +24,21 @@ def main(argv: list[str] | None = None):
     # Check blockers
     all_tasks = load_all_tasks()
     status_map = task_status_map(all_tasks)
+    task_map = {t["id"]: t for t in all_tasks}
     for bid in task.get("blocked_by", []):
-        if status_map.get(bid) != "done":
-            print(f"Error: blocker {bid} is not done (status: {status_map.get(bid, 'missing')})", file=sys.stderr)
+        blocker_status = status_map.get(bid, "missing")
+        if blocker_status == "failed":
+            blocker = task_map.get(bid, {})
+            reason = blocker.get("failure_reason", "no reason recorded")
+            print(
+                f"Error: blocker {bid} failed — this task cannot proceed.\n"
+                f"  Blocker title:  {blocker.get('title', '?')}\n"
+                f"  Failure reason: {reason}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if blocker_status != "done":
+            print(f"Error: blocker {bid} is not done (status: {blocker_status})", file=sys.stderr)
             sys.exit(1)
 
     # Append claimed event
