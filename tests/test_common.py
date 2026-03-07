@@ -32,8 +32,7 @@ class TestValidateTaskShape:
             model="opus",
             thinking=True,
             result=None,
-            task_children=[],
-            task_parent=None,
+            created_by=None,
         )
         errors = validate_task_shape(task)
         assert errors == []

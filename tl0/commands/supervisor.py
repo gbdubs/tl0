@@ -968,12 +968,12 @@ def _create_task(data: dict) -> dict:
         except SystemExit:
             raise ValueError(f"Could not resolve blocked-by reference: '{ref}'")
 
-    parent_id = None
+    created_by = None
     parent_raw = (data.get("parent") or "").strip()
     if parent_raw:
         try:
-            parent = load_task(parent_raw)
-            parent_id = parent["id"]
+            creator = load_task(parent_raw)
+            created_by = creator["id"]
         except SystemExit:
             raise ValueError(f"Could not resolve parent reference: '{parent_raw}'")
 
@@ -988,8 +988,7 @@ def _create_task(data: dict) -> dict:
         "model": model,
         "thinking": data.get("thinking"),
         "result": None,
-        "task_children": [],
-        "task_parent": parent_id,
+        "created_by": created_by,
     }
 
     errors = validate_task_shape(task)
@@ -997,13 +996,6 @@ def _create_task(data: dict) -> dict:
         raise ValueError("Validation failed: " + "; ".join(errors))
 
     save_task(task)
-
-    # Update parent's task_children
-    if parent_id:
-        parent = load_task(parent_id)
-        if task_id not in parent.get("task_children", []):
-            parent.setdefault("task_children", []).append(task_id)
-            save_task(parent)
 
     git_commit(f"create: {title}")
     return {"ok": True, "id": task_id, "title": title}
@@ -1094,9 +1086,11 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 t["completed_at"]  = task_completed_at(t)
                 t["created_at"]    = task_created_at(t)
                 t["updated_at"]    = task_updated_at(t)
-                t["tasks_created"] = t.get("task_children", [])
-                t["parent_task"]   = t.get("task_parent")
+                t["parent_task"]   = t.get("created_by")
                 tasks.append(t)
+            # Derive tasks_created by scanning created_by references
+            for t in tasks:
+                t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
             self._respond_json(tasks)
 
         elif path.startswith('/viewer/api/transcripts/'):

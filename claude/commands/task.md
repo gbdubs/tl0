@@ -29,7 +29,7 @@ Run `tl0m show <uuid>` and read the full JSON.
 
 # PLANNING MODE — Decompose the task
 
-**In PLANNING mode, you must NEVER write application code. Your only job is to create child tasks or confirm a task is atomic.**
+**In PLANNING mode, you must NEVER write application code. Your only job is to create sub-tasks or confirm a task is atomic.**
 
 ## Decide: is this task atomic?
 
@@ -59,9 +59,9 @@ Find natural boundaries:
 - **Interface vs. implementation**
 - **Verification** (write the code vs. verify integration)
 
-### 2. Create child tasks
+### 2. Create sub-tasks
 
-For EACH child:
+For EACH sub-task:
 
 ```bash
 tl0m create \
@@ -75,7 +75,7 @@ Set `--blocked-by` between siblings where ordering matters.
 
 ### 3. Transfer the parent's dependencies
 
-Move the parent's `blocked_by` to the FIRST child tasks that actually depend on them.
+Move the parent's `blocked_by` to the FIRST sub-tasks that actually depend on them.
 
 ### 4. Include verification tasks
 
@@ -85,8 +85,7 @@ For every group of 3+ implementation tasks, add a **verification task** as the l
 
 ```bash
 tl0m done <parent-uuid> \
-  --result "Decomposed into N tasks: [one-line summary of each child]" \
-  --created "uuid1,uuid2,uuid3,..."
+  --result "Decomposed into N tasks: [one-line summary of each]"
 ```
 
 ## Decomposition depth

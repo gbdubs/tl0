@@ -29,7 +29,7 @@ def get_areas(task):
 
 def build_catalog(tasks_list):
     tasks = {t["id"]: t for t in tasks_list}
-    parent_ids = {t.get("task_parent") for t in tasks.values()}
+    parent_ids = {t.get("created_by") for t in tasks.values()}
     leaf_tasks = {tid: t for tid, t in tasks.items() if tid not in parent_ids}
 
     lines = []

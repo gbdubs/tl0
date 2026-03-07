@@ -29,7 +29,7 @@ def make_task(tasks_dir):
 
     def _make(title="Test task", description="A test task", status="pending",
               blocked_by=None, tags=None, task_id=None, model=None, thinking=None,
-              claimed_by=None, task_parent=None, result=None, task_children=None,
+              claimed_by=None, created_by=None, result=None,
               events=None, **kwargs):
         import uuid
         tid = task_id or str(uuid.uuid4())
@@ -55,8 +55,7 @@ def make_task(tasks_dir):
             "model": model,
             "thinking": thinking,
             "result": result,
-            "task_children": task_children or [],
-            "task_parent": task_parent,
+            "created_by": created_by,
         }
         task.update(kwargs)
         path = tasks_dir / f"{tid}.json"
