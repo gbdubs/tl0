@@ -70,7 +70,38 @@ CODE_REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   EXPECTED_EXIT=true; exit 1
 }
 WORKTREE_BASE="$CODE_REPO/.task-worktrees"
-AGENT_ID="task-loop-$$"
+
+# Pick the first bird name not already in use as an agent ID
+_pick_bird_name() {
+  local birds=(
+    Avocet Bobolink Crow Dowitcher Egret
+    Finch Goshawk Harrier Ibis Jay
+    Killdeer Loon Magpie Nuthatch Oriole
+    Parrot Quail Robin Sparrow Towhee
+    Uguisu Vulture Waxwing Xenops Yellowthroat
+    "Zebra Finch"
+  )
+  local used_agents
+  used_agents=$(tl0m find --limit 100 2>/dev/null \
+    | python3 -c "
+import json,sys
+tasks = json.load(sys.stdin)
+agents = set()
+for t in tasks:
+    cb = t.get('claimed_by','')
+    if cb: agents.add(cb)
+print('\n'.join(agents))
+" 2>/dev/null || true)
+  for bird in "${birds[@]}"; do
+    if ! echo "$used_agents" | grep -qxF "$bird"; then
+      echo "$bird"
+      return
+    fi
+  done
+  echo "worker-$$"
+}
+
+AGENT_ID="$(_pick_bird_name)"
 
 # Resolve the transcripts directory from tl0's tasks dir
 TRANSCRIPTS_DIR=$(python3 -c "
@@ -405,6 +436,8 @@ merge_and_push() {
 
   local max_attempts=20
   local pushed=false
+  local pushed_sha=""
+  local sha_candidate pre_commit_sha
 
   for attempt in $(seq 1 $max_attempts); do
     log "    Squash+push attempt $attempt/$max_attempts..."
@@ -417,9 +450,16 @@ merge_and_push() {
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+      sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+      # If commit was a no-op (no changes), don't record a stale SHA
+      if [ "$sha_candidate" = "$pre_commit_sha" ]; then
+        sha_candidate=""
+      fi
       if git -C "$CODE_REPO" push origin main 2>/dev/null; then
         pushed=true
+        pushed_sha="$sha_candidate"
         break
       fi
       warn "Push rejected (attempt $attempt/$max_attempts). Resetting and retrying..."
@@ -453,9 +493,15 @@ merge_and_push() {
       continue
     fi
 
+    pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+    sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+    if [ "$sha_candidate" = "$pre_commit_sha" ]; then
+      sha_candidate=""
+    fi
     if git -C "$CODE_REPO" push origin main 2>/dev/null; then
       pushed=true
+      pushed_sha="$sha_candidate"
       break
     fi
 
@@ -473,6 +519,7 @@ merge_and_push() {
     return 1
   fi
 
+  MERGE_AND_PUSH_SHA="$pushed_sha"
   return 0
 }
 
@@ -718,6 +765,7 @@ if text_parts:
     "$short_id" "$title" "$task_id" "$description" "$duration")"
 
   # --- Squash-merge task branch into main and push ---
+  MERGE_AND_PUSH_SHA=""
   if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg"; then
     warn "Failed to merge and push task branch. Preserving work."
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
@@ -732,9 +780,8 @@ if text_parts:
     return 1
   fi
 
-  # --- Capture merge SHA ---
-  local merge_sha
-  merge_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+  # --- Capture merge SHA (set atomically inside merge_and_push) ---
+  local merge_sha="$MERGE_AND_PUSH_SHA"
 
   # --- Mark task done ---
   if [ -z "$result_text" ]; then
