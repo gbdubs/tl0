@@ -12,6 +12,7 @@ import argparse
 import html
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -1020,6 +1021,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
     viewer_page_title: str = "tl0 Task Viewer"
     viewer_header_bg: str = "#111827"
     viewer_favicon_svg: str = ""
+    code_repo: str = ""
+    github_repo_url: str = ""
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -1063,14 +1066,16 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             rendered = VIEWER_HTML \
                 .replace('{{PAGE_TITLE}}', html.escape(self.viewer_page_title)) \
                 .replace('{{HEADER_BG}}', self.viewer_header_bg) \
+                .replace('{{GITHUB_REPO_URL}}', self.github_repo_url) \
                 .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
                 .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
-                .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'")
+                .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
+                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
-                '<button id="refresh-btn"',
-                '<a href="/" style="color:#e5e7eb; text-decoration:none; font-size:11px; padding:4px 10px; border:1px solid #4b5563; border-radius:5px; font-weight:500; background:#374151;">← Supervisor</a>\n  <button id="refresh-btn"',
+                '<span id="supervisor-link-slot"></span>',
+                '<a href="/" style="color:#e5e7eb; text-decoration:none; font-size:11px; padding:4px 10px; border:1px solid #4b5563; border-radius:5px; font-weight:500; background:#374151;">← Supervisor</a>',
                 1,
             )
             self._respond(200, rendered, 'text/html')
@@ -1106,6 +1111,23 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif path.startswith('/viewer/api/diff/'):
+            sha = path.split('/')[-1]
+            if not re.fullmatch(r'[0-9a-fA-F]{6,40}', sha) or not self.code_repo:
+                self.send_response(400)
+                self.end_headers()
+                return
+            try:
+                result = subprocess.run(
+                    ['git', 'diff', f'{sha}~1..{sha}'],
+                    cwd=self.code_repo,
+                    capture_output=True, text=True, timeout=30,
+                )
+                diff_text = result.stdout if result.returncode == 0 else f"git diff failed: {result.stderr}"
+            except Exception as exc:
+                diff_text = f"Error running git diff: {exc}"
+            self._respond(200, diff_text, 'text/plain')
 
         else:
             self.send_response(404)
@@ -1266,6 +1288,34 @@ def main(argv=None):
     SupervisorHandler.viewer_page_title = f"{Path.cwd().name} — tl0 Task Viewer"
     SupervisorHandler.viewer_header_bg = viewer_bg
     SupervisorHandler.viewer_favicon_svg = _build_viewer_favicon(viewer_bg)
+
+    # Resolve code repo path and GitHub URL for diff viewer
+    code_repo = ""
+    github_repo_url = ""
+    try:
+        code_repo = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        pass
+    if code_repo:
+        try:
+            remote_url = subprocess.run(
+                ['git', 'remote', 'get-url', 'origin'],
+                cwd=code_repo, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            m = re.match(r'git@github\.com:(.+?)(?:\.git)?$', remote_url)
+            if m:
+                github_repo_url = f'https://github.com/{m.group(1)}'
+            else:
+                m = re.match(r'https://github\.com/(.+?)(?:\.git)?$', remote_url)
+                if m:
+                    github_repo_url = f'https://github.com/{m.group(1)}'
+        except Exception:
+            pass
+    SupervisorHandler.code_repo = code_repo
+    SupervisorHandler.github_repo_url = github_repo_url
 
     server = HTTPServer(('127.0.0.1', port), SupervisorHandler)
     url = f'http://localhost:{port}'

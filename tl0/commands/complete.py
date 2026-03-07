@@ -13,6 +13,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("task_id", nargs="?", help="Task UUID (prefix OK). Defaults to TL0_TASK_ID env var.")
     parser.add_argument("--result", required=True, help="Summary of what was done")
     parser.add_argument("--created", default="", help="Comma-separated UUIDs of child tasks created")
+    parser.add_argument("--merge-sha", default="", help="Git SHA of the merge commit on main")
     args = parser.parse_args(argv)
 
     task_id = args.task_id or os.environ.get("TL0_TASK_ID")
@@ -30,6 +31,8 @@ def main(argv: list[str] | None = None):
     claiming_agent = task["events"][-1].get("by") if task["events"] else None
 
     task["result"] = args.result
+    if args.merge_sha:
+        task["merge_sha"] = args.merge_sha
     task["events"].append({"type": "done", "at": now_iso(), "by": claiming_agent} if claiming_agent
                           else {"type": "done", "at": now_iso()})
 

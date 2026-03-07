@@ -107,6 +107,10 @@
       "type": ["string", "null"],
       "format": "uuid",
       "description": "ID of the task that spawned this one. Null if created directly by a human."
+    },
+    "merge_sha": {
+      "type": ["string", "null"],
+      "description": "Git SHA of the squash-merge commit on main. Set after successful merge+push."
     }
   },
   "additionalProperties": false
