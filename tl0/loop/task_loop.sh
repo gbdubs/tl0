@@ -498,7 +498,12 @@ merge_and_push() {
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-      git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+      if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
+        warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected."
+        git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
+        git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+        break
+      fi
       sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       # If commit was a no-op (no changes), don't record a stale SHA
       if [ "$sha_candidate" = "$pre_commit_sha" ]; then
@@ -552,7 +557,12 @@ merge_and_push() {
     fi
 
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-    git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null || true
+    if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
+      warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected."
+      git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
+      git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+      break
+    fi
     sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     if [ "$sha_candidate" = "$pre_commit_sha" ]; then
       sha_candidate=""
