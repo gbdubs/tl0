@@ -360,6 +360,36 @@ class SupervisorState:
                 if phase in ("polling", "idle", "starting", ""):
                     w.kill()
 
+    def spawn_oneoff(self, task_id: str) -> LoopWorker:
+        """Spawn a worker that runs exactly one specific task, then exits."""
+        bird_name = self._next_bird_name()
+        slot_id = bird_name
+        status_file = self.status_dir / f"{slot_id}.json"
+
+        env = os.environ.copy()
+        env["TL0_LOOP_STATUS_FILE"] = str(status_file)
+        env["TL0_QUOTA_DIR"] = str(self.quota_dir)
+        env["TL0_LOOP_SLOT_ID"] = slot_id
+
+        args = [
+            "bash", str(self.loop_script),
+            "--task-id", task_id,
+            "--agent", bird_name,
+        ] + self.base_loop_args
+
+        proc = subprocess.Popen(
+            args,
+            env=env,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        worker = LoopWorker(slot_id, proc, status_file, self.base_loop_args)
+        with self._lock:
+            self.workers[slot_id] = worker
+        return worker
+
     def shutdown(self):
         self.shutting_down = True
         self.kill_all()
@@ -1321,6 +1351,7 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
                 .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
                 .replace("fetch('/api/transcript-messages/'", "fetch('/viewer/api/transcript-messages/'") \
+                .replace("fetch(`/api/transcript-messages/", "fetch(`/viewer/api/transcript-messages/") \
                 .replace("fetch('/api/all-transcripts')", "fetch('/viewer/api/all-transcripts')") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
                 .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
@@ -1329,6 +1360,17 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
                 '<a href="/" style="color:#e5e7eb; text-decoration:none; font-size:11px; padding:4px 10px; border:1px solid #4b5563; border-radius:5px; font-weight:500; background:#374151;">← Supervisor</a>',
+                1,
+            )
+            # Enable "Run Now" button when embedded in supervisor
+            rendered = rendered.replace(
+                "window.__SUPERVISOR_ENABLED__ = false",
+                "window.__SUPERVISOR_ENABLED__ = true",
+                1,
+            )
+            rendered = rendered.replace(
+                "window.__SUPERVISOR_API_BASE__ = ''",
+                "window.__SUPERVISOR_API_BASE__ = '/viewer'",
                 1,
             )
             self._respond(200, rendered, 'text/html')
@@ -1486,6 +1528,28 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 self._respond_json(result)
             except ValueError as e:
                 self._respond_error(400, str(e))
+            except Exception as e:
+                self._respond_error(500, str(e))
+
+        elif path in ('/api/run-task', '/viewer/api/run-task'):
+            try:
+                data = json.loads(body) if body else {}
+                task_id = data.get("task_id", "").strip()
+                if not task_id:
+                    self._respond_error(400, "task_id is required")
+                    return
+                # Validate task exists and is pending
+                try:
+                    task = load_task(task_id)
+                except SystemExit:
+                    self._respond_error(404, f"Task not found: {task_id}")
+                    return
+                status = task_status(task)
+                if status != "pending":
+                    self._respond_error(400, f"Task is {status}, not pending")
+                    return
+                worker = self.state.spawn_oneoff(task["id"])
+                self._respond_json({"ok": True, "slot_id": worker.slot_id, "task_id": task["id"]})
             except Exception as e:
                 self._respond_error(500, str(e))
 

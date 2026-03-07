@@ -167,6 +167,7 @@ MAX_TASKS=0  # 0 = unlimited
 DRY_RUN=false
 POLL_INTERVAL=30
 RESUME_TASK_ID=""
+TARGET_TASK_ID=""
 TASK_PROMPT=""
 
 # Parse args
@@ -180,6 +181,7 @@ while [[ $# -gt 0 ]]; do
     --poll)       POLL_INTERVAL="$2"; shift 2 ;;
     --agent)      AGENT_ID="$2"; shift 2 ;;
     --resume)     RESUME_TASK_ID="$2"; shift 2 ;;
+    --task-id)    TARGET_TASK_ID="$2"; ONCE=true; shift 2 ;;
     --prompt)     TASK_PROMPT="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,/^$/s/^# *//p' "$0"
@@ -634,15 +636,15 @@ run_task() {
     # --- Resume mode: use existing branch ---
     if [ ! -d "$worktree" ]; then
       if git -C "$CODE_REPO" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-        git -C "$CODE_REPO" worktree add --quiet "$worktree" "$branch" 2>/dev/null || {
-          warn "Failed to create worktree from existing branch."
+        wt_err=$(git -C "$CODE_REPO" worktree add --quiet "$worktree" "$branch" 2>&1) || {
+          warn "Failed to create worktree from existing branch: $wt_err"
           TASK_TRANSCRIPT_DIR=""; TASK_SESSION_ID=""
           return 1
         }
       elif git -C "$CODE_REPO" show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
         git -C "$CODE_REPO" fetch origin "$branch" 2>/dev/null || true
-        git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" "origin/$branch" 2>/dev/null || {
-          warn "Failed to create worktree from origin branch."
+        wt_err=$(git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" "origin/$branch" 2>&1) || {
+          warn "Failed to create worktree from origin branch: $wt_err"
           TASK_TRANSCRIPT_DIR=""
           return 1
         }
@@ -656,12 +658,33 @@ run_task() {
     # --- Create worktree ---
     cleanup_worktree "$short_id"
 
-    if ! git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" main 2>/dev/null; then
-      warn "Failed to create worktree. Freeing task."
-      tl0m free 2>/dev/null || true
+    local wt_err
+    if ! wt_err=$(git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" main 2>&1); then
+      warn "Failed to create worktree: $wt_err"
+
+      # Track consecutive failures to avoid infinite retry loops (see 11abf605 incident).
+      local fail_file="/tmp/tl0-wt-fail-${short_id}"
+      local fail_count=0
+      [[ -f "$fail_file" ]] && fail_count=$(cat "$fail_file")
+      fail_count=$((fail_count + 1))
+      echo "$fail_count" > "$fail_file"
+
+      if [[ "$fail_count" -ge 5 ]]; then
+        warn "Worktree creation failed 5 times for $short_id. Marking task as errored."
+        tl0m done --result "error: worktree creation failed $fail_count times: $wt_err" 2>/dev/null || true
+        rm -f "$fail_file"
+      else
+        warn "Worktree failure $fail_count/5. Freeing task (backoff ${fail_count}0s)."
+        tl0m free 2>/dev/null || true
+        sleep $((fail_count * 10))
+      fi
+
       TASK_TRANSCRIPT_DIR=""
       return 1
     fi
+
+    # Clear any previous failure counter on success.
+    rm -f "/tmp/tl0-wt-fail-${short_id}"
 
     # --- Run claude ---
     local prompt
@@ -901,6 +924,34 @@ else:
   }
 
   log "Resume complete."
+  EXPECTED_EXIT=true; exit 0
+fi
+
+# --- Targeted task mode (--task-id) ---
+if [[ -n "$TARGET_TASK_ID" ]]; then
+  log "Running targeted task $TARGET_TASK_ID..."
+  pull_main
+
+  task_json=$(tl0m show "$TARGET_TASK_ID" 2>/dev/null | python3 -c "
+import json, sys
+t = json.load(sys.stdin)
+if isinstance(t, list):
+    print(json.dumps(t))
+else:
+    print(json.dumps([t]))
+" 2>/dev/null)
+
+  if [ -z "$task_json" ] || [ "$task_json" = "null" ] || [ "$task_json" = "[]" ]; then
+    warn "Could not load task $TARGET_TASK_ID"
+    EXPECTED_EXIT=true; exit 1
+  fi
+
+  run_task "$task_json" || {
+    warn "Targeted task $TARGET_TASK_ID failed."
+    EXPECTED_EXIT=true; exit 1
+  }
+
+  log "Targeted task complete."
   EXPECTED_EXIT=true; exit 0
 fi
 
