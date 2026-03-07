@@ -405,7 +405,7 @@ merge_main_into_branch() {
   local model="$3"
   local label="${4:-}"
 
-  if git -C "$worktree" merge --quiet main -m "Merge main into task/$short_id${label:+ ($label)}" 2>/dev/null; then
+  if git -C "$worktree" merge --quiet origin/main -m "Merge main into task/$short_id${label:+ ($label)}" 2>/dev/null; then
     return 0
   fi
 
@@ -427,6 +427,40 @@ merge_main_into_branch() {
   return 0
 }
 
+# Lock directory for serializing merge_and_push across concurrent task loops.
+# All loops sharing the same CODE_REPO must acquire this lock before
+# operating on the main branch to prevent races that lose commits and
+# produce incorrect merge SHAs.
+MERGE_LOCK_DIR="$CODE_REPO/.git/tl0-merge.lock"
+
+_acquire_merge_lock() {
+  local max_wait=120
+  local waited=0
+  while ! mkdir "$MERGE_LOCK_DIR" 2>/dev/null; do
+    # Check for stale locks (PID file inside the lock dir)
+    if [ -f "$MERGE_LOCK_DIR/pid" ]; then
+      local lock_pid
+      lock_pid=$(cat "$MERGE_LOCK_DIR/pid" 2>/dev/null || true)
+      if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        warn "Removing stale merge lock (pid $lock_pid is dead)."
+        rm -rf "$MERGE_LOCK_DIR" 2>/dev/null || true
+        continue
+      fi
+    fi
+    if [ "$waited" -ge "$max_wait" ]; then
+      return 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "$$" > "$MERGE_LOCK_DIR/pid"
+  return 0
+}
+
+_release_merge_lock() {
+  rm -rf "$MERGE_LOCK_DIR" 2>/dev/null || true
+}
+
 merge_and_push() {
   local worktree="$1"
   local short_id="$2"
@@ -438,6 +472,17 @@ merge_and_push() {
   local pushed=false
   local pushed_sha=""
   local sha_candidate pre_commit_sha
+
+  # Acquire an exclusive lock so only one task loop at a time can
+  # operate on CODE_REPO's main branch.  Without this, concurrent loops
+  # trample each other's staging area (git reset --hard from one loop
+  # destroys another's squash-merge), causing:
+  #   1. Task code changes silently lost (never pushed)
+  #   2. Wrong merge_sha captured (stale HEAD from another loop's reset)
+  if ! _acquire_merge_lock; then
+    warn "Could not acquire merge lock after 120s. Skipping merge."
+    return 1
+  fi
 
   for attempt in $(seq 1 $max_attempts); do
     log "    Squash+push attempt $attempt/$max_attempts..."
@@ -474,11 +519,22 @@ merge_and_push() {
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
+    # Release lock while Claude resolves merge conflicts (can be slow)
+    _release_merge_lock
+
     if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt"; then
       warn "Could not merge main into task branch on attempt $attempt. Aborting retries."
+      # Re-acquire lock just so the post-loop release doesn't error
+      _acquire_merge_lock 2>/dev/null || true
       break
     fi
     reconcile_generated_files "$worktree"
+
+    # Re-acquire lock for the squash+commit+push sequence
+    if ! _acquire_merge_lock; then
+      warn "Could not re-acquire merge lock. Aborting retries."
+      break
+    fi
 
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
@@ -510,6 +566,9 @@ merge_and_push() {
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
     sleep $((1 + RANDOM % 3))
   done
+
+  # Release the lock
+  _release_merge_lock
 
   if ! $pushed; then
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
@@ -704,7 +763,7 @@ if text_parts:
 
   # --- Check if claude committed anything ---
   local commit_count
-  commit_count=$(git -C "$worktree" rev-list --count main.."$branch" 2>/dev/null || echo "0")
+  commit_count=$(git -C "$worktree" rev-list --count origin/main.."$branch" 2>/dev/null || echo "0")
 
   if [ "$commit_count" -eq 0 ]; then
     if [ -n "$result_text" ]; then
@@ -733,7 +792,10 @@ if text_parts:
   # --- Merge main into the task branch ---
   write_status "merging" "$task_id" "$title"
   log "    Pulling latest main and merging into task branch..."
-  pull_main
+  # Fetch latest main without touching CODE_REPO's working directory or index.
+  # Using pull_main here (checkout + reset) would destroy a concurrent
+  # merge_and_push's staging area in the shared CODE_REPO.
+  git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
 
   if ! merge_main_into_branch "$worktree" "$short_id" "$model"; then
     warn "Failed to merge main into task branch. Preserving work."
