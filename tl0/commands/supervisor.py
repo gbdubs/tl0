@@ -1734,12 +1734,18 @@ def main(argv=None):
     # the server is actively handling a request (browser polls every 2s).
     def _request_shutdown(signum, frame):
         server._BaseServer__shutdown_request = True
+        # Next signal should force-exit immediately (skip cleanup)
+        signal.signal(signal.SIGINT, lambda s, f: os._exit(1))
+        signal.signal(signal.SIGTERM, lambda s, f: os._exit(1))
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _request_shutdown)
     signal.signal(signal.SIGTERM, _request_shutdown)
 
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
         print('\nShutting down...')
         state.shutdown()

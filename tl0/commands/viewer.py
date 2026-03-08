@@ -8,6 +8,7 @@ Usage:
 import argparse
 import html
 import json
+import os
 import re
 import signal
 import socket
@@ -521,7 +522,7 @@ body {
 /* ── Conversation viewer ──────────────────────────────────── */
 .conv-panel {
   background: white; color: var(--text); border-radius: 12px;
-  width: min(92vw, 1000px); max-height: 90vh; display: flex; flex-direction: column;
+  width: min(92vw, 1000px); height: 90vh; display: flex; flex-direction: column;
   box-shadow: 0 25px 50px rgba(0,0,0,.5);
 }
 .conv-panel-header {
@@ -1310,18 +1311,15 @@ async function showInvocationDetail(taskId, filename) {
         <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">\u2715</button>
       </div>
       <div class="conv-tab-bar">
-        <button class="conv-tab active" data-tab="timeline" onclick="switchConvTab(this)">Timeline</button>
-        <button class="conv-tab" data-tab="conversation" onclick="switchConvTab(this)">Conversation</button>
+        <button class="conv-tab active" data-tab="chat" onclick="switchConvTab(this)">Chat</button>
         <button class="conv-tab" data-tab="raw-json" onclick="switchConvTab(this)">Raw JSON</button>
       </div>
       <div class="conv-panel-body">
-        <div class="conv-tab-content active" id="tab-timeline">${timelineHtml}</div>
-        <div class="conv-tab-content" id="tab-conversation"><div style="color:#9ca3af;padding:12px">Loading\u2026</div></div>
+        <div class="conv-tab-content active" id="tab-chat">${timelineHtml}</div>
         <div class="conv-tab-content" id="tab-raw-json"><div class="conv-raw-json">Loading\u2026</div></div>
       </div>
     </div>`;
     document.body.appendChild(overlay);
-    overlay._convLoaded = false;
     overlay._rawLoaded = false;
     overlay._taskId = taskId;
     overlay._filename = filename;
@@ -1441,10 +1439,6 @@ function switchConvTab(btn) {
   panel.querySelectorAll('.conv-tab-content').forEach(c => c.classList.remove('active'));
   panel.querySelector('#tab-' + tabName).classList.add('active');
   const overlay = panel.closest('.log-overlay');
-  if (tabName === 'conversation' && !overlay._convLoaded) {
-    overlay._convLoaded = true;
-    loadConversation(overlay._taskId, overlay._filename, panel.querySelector('#tab-conversation'));
-  }
   if (tabName === 'raw-json') {
     if (!overlay._rawLoaded) {
       overlay._rawLoaded = true;
@@ -3471,19 +3465,41 @@ def _build_transcript_messages(task_id: str, filename: str) -> list:
             content = msg.get("content", [])
             if not isinstance(content, list):
                 continue
-            # Deduplicate: Claude Code streams partial assistant messages,
-            # so the same message ID appears multiple times. We keep the last one.
+            # Deduplicate: each assistant message ID appears multiple times as blocks
+            # stream in one at a time. Merge blocks across events for the same ID.
             msg_id = msg.get("id", "")
             if msg_id and msg_id in seen_assistant_ids:
-                # Replace the last assistant entry that has the same id
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].get("_msg_id") == msg_id:
-                        messages[i] = {"role": "assistant", "content": content, "_msg_id": msg_id}
+                        merged = messages[i]["content"]
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            bid = block.get("id")
+                            btype = block.get("type")
+                            if bid:
+                                found = False
+                                for j, mb in enumerate(merged):
+                                    if isinstance(mb, dict) and mb.get("id") == bid:
+                                        merged[j] = block
+                                        found = True
+                                        break
+                                if not found:
+                                    merged.append(block)
+                            else:
+                                found = False
+                                for j, mb in enumerate(merged):
+                                    if isinstance(mb, dict) and mb.get("type") == btype and not mb.get("id"):
+                                        merged[j] = block
+                                        found = True
+                                        break
+                                if not found:
+                                    merged.append(block)
                         break
             else:
                 if msg_id:
                     seen_assistant_ids.add(msg_id)
-                messages.append({"role": "assistant", "content": content, "_msg_id": msg_id})
+                messages.append({"role": "assistant", "content": list(content), "_msg_id": msg_id})
 
             # Track tool names
             for block in content:
@@ -3645,12 +3661,35 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
             if msg_id and msg_id in seen_assistant_ids:
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].get("_msg_id") == msg_id:
-                        messages[i] = {"role": "assistant", "content": content, "_msg_id": msg_id}
+                        merged = messages[i]["content"]
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            bid = block.get("id")
+                            btype = block.get("type")
+                            if bid:
+                                found = False
+                                for j, mb in enumerate(merged):
+                                    if isinstance(mb, dict) and mb.get("id") == bid:
+                                        merged[j] = block
+                                        found = True
+                                        break
+                                if not found:
+                                    merged.append(block)
+                            else:
+                                found = False
+                                for j, mb in enumerate(merged):
+                                    if isinstance(mb, dict) and mb.get("type") == btype and not mb.get("id"):
+                                        merged[j] = block
+                                        found = True
+                                        break
+                                if not found:
+                                    merged.append(block)
                         break
             else:
                 if msg_id:
                     seen_assistant_ids.add(msg_id)
-                messages.append({"role": "assistant", "content": content, "_msg_id": msg_id})
+                messages.append({"role": "assistant", "content": list(content), "_msg_id": msg_id})
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tool_uses[block.get("id", "")] = {
@@ -4352,12 +4391,18 @@ def main(argv=None):
 
     def _request_shutdown(signum, frame):
         server._BaseServer__shutdown_request = True
+        # Next signal should force-exit immediately
+        signal.signal(signal.SIGINT, lambda s, f: os._exit(1))
+        signal.signal(signal.SIGTERM, lambda s, f: os._exit(1))
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _request_shutdown)
     signal.signal(signal.SIGTERM, _request_shutdown)
 
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
         print('\nStopped.')
 
