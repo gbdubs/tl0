@@ -248,7 +248,7 @@ run_claude() {
     --verbose \
     --dangerously-skip-permissions \
     --output-format stream-json \
-    --verbose \
+    --include-partial-messages \
     ${resume_session_id:+--resume "$resume_session_id"} \
     "$prompt" 2>&1 \
     | tee "$transcript_file"

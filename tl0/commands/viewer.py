@@ -528,7 +528,40 @@ body {
   padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .conv-panel-header h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.conv-tab-bar {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  padding: 0 16px;
+}
+.conv-tab {
+  padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+  border-bottom: 2px solid transparent; color: var(--muted); background: none;
+  border-top: none; border-left: none; border-right: none;
+}
+.conv-tab:hover { color: var(--text); }
+.conv-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .conv-panel-body { flex: 1; overflow: auto; padding: 16px; }
+.conv-tab-content { display: none; }
+.conv-tab-content.active { display: block; }
+.conv-raw-json {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace; font-size: 12px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  color: var(--text);
+}
+.conv-raw-event {
+  margin-bottom: 4px; padding: 8px 10px; background: #f9fafb;
+  border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer; font-size: 12px;
+}
+.conv-raw-event:hover { background: #f0f4f8; }
+.conv-raw-event-summary {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace; font-size: 12px;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conv-raw-event-body {
+  display: none; margin-top: 8px; font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  max-height: 400px; overflow: auto;
+}
 .conv-msg {
   margin-bottom: 12px; border-radius: 8px; padding: 10px 14px;
   font-size: 13px; line-height: 1.6;
@@ -1235,10 +1268,59 @@ async function showInvocationDetail(taskId, filename) {
         <h3>Execution — ${esc(filename)}</h3>
         <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
       </div>
-      <div class="conv-panel-body">${body}</div>
+      <div class="conv-tab-bar">
+        <button class="conv-tab active" data-tab="conversation" onclick="switchConvTab(this)">Conversation</button>
+        <button class="conv-tab" data-tab="raw-json" onclick="switchConvTab(this)">Raw JSON</button>
+      </div>
+      <div class="conv-panel-body">
+        <div class="conv-tab-content active" id="tab-conversation">${body}</div>
+        <div class="conv-tab-content" id="tab-raw-json"><div class="conv-raw-json">Loading…</div></div>
+      </div>
     </div>`;
     document.body.appendChild(overlay);
+    // Lazy-load raw JSON when that tab is first activated
+    overlay._rawLoaded = false;
+    overlay._taskId = taskId;
+    overlay._filename = filename;
   } catch (_) {}
+}
+
+function switchConvTab(btn) {
+  const panel = btn.closest('.conv-panel');
+  panel.querySelectorAll('.conv-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const tabName = btn.dataset.tab;
+  panel.querySelectorAll('.conv-tab-content').forEach(c => c.classList.remove('active'));
+  panel.querySelector('#tab-' + tabName).classList.add('active');
+  if (tabName === 'raw-json') {
+    const overlay = panel.closest('.log-overlay');
+    if (!overlay._rawLoaded) {
+      overlay._rawLoaded = true;
+      loadRawJson(overlay._taskId, overlay._filename, panel.querySelector('#tab-raw-json'));
+    }
+  }
+}
+
+async function loadRawJson(taskId, filename, container) {
+  try {
+    const res = await fetch(`/api/transcript-raw/${taskId}/${filename}`);
+    if (!res.ok) { container.innerHTML = '<div class="conv-raw-json">Failed to load raw JSON.</div>'; return; }
+    const events = await res.json();
+    let html = '';
+    events.forEach((evt, i) => {
+      const evtType = evt.type || 'unknown';
+      const summary = JSON.stringify(evt).substring(0, 150);
+      const full = JSON.stringify(evt, null, 2);
+      const bodyId = 'raw-evt-' + i;
+      html += `<div class="conv-raw-event" onclick="toggleConvEl('${bodyId}')">`;
+      html += `<div class="conv-raw-event-summary"><strong>${i}</strong> &nbsp; <code>${esc(evtType)}</code> &nbsp; ${esc(summary)}</div>`;
+      html += `<div class="conv-raw-event-body" id="${bodyId}">${esc(full)}</div>`;
+      html += `</div>`;
+    });
+    container.innerHTML = `<div class="conv-raw-json">${html}</div>`;
+  } catch (e) {
+    container.innerHTML = '<div class="conv-raw-json">Error loading raw JSON.</div>';
+  }
 }
 
 function toggleConvEl(id) {
@@ -1549,6 +1631,7 @@ function _applyView(v) {
 }
 function setView(v) {
   state.view = v;
+  if (v === 'chart') { state.selectedId = null; }
   persist();
   _applyView(v);
 }
@@ -3203,6 +3286,45 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(err)
             else:
                 err = json.dumps({"error": "Bad request", "path": path}).encode('utf-8')
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+
+        elif path.startswith('/api/transcript-raw/'):
+            parts = path.split('/')
+            # /api/transcript-raw/<task_id>/<filename>
+            if len(parts) >= 5:
+                task_id = parts[3]
+                filename = parts[4]
+                try:
+                    filepath = TRANSCRIPTS_FOLDER / task_id / filename
+                    events = []
+                    if filepath.exists():
+                        for line in filepath.read_text().splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                events.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                events.append({"type": "parse_error", "raw": line[:500]})
+                    body = json.dumps(events).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as exc:
+                    err = json.dumps({"error": str(exc)}).encode('utf-8')
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
+            else:
+                err = json.dumps({"error": "Bad request"}).encode('utf-8')
                 self.send_response(400)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Content-Length', str(len(err)))
