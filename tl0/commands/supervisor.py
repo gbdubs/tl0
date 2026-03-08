@@ -121,7 +121,7 @@ class LoopWorker:
 
 class SupervisorState:
 
-    def __init__(self, loop_script: Path, base_loop_args: list[str]):
+    def __init__(self, loop_script: Path, base_loop_args: list[str], skip_auto_drain: bool = False):
         self._lock = threading.Lock()
         self.loop_script = loop_script
         self.base_loop_args = base_loop_args
@@ -138,6 +138,7 @@ class SupervisorState:
         self.quota_snapshots: list[dict] = []  # [{timestamp, utilization, resets_at, status, ...}]
         self.quota_auto_drained = False  # True if we auto-drained due to high utilization
         self._pre_drain_parallelism: int = 0
+        self.skip_auto_drain = skip_auto_drain
 
     def _next_bird_name(self) -> str:
         """Return the first bird name not currently in use by an active worker."""
@@ -247,6 +248,8 @@ class SupervisorState:
 
     def _check_auto_drain(self):
         """Auto-drain pool when quota utilization >= 90%."""
+        if self.skip_auto_drain:
+            return
         if not self.quota_snapshots:
             return
         latest = self.quota_snapshots[-1]
@@ -1621,6 +1624,8 @@ def main(argv=None):
                         help='Poll interval for idle loops in seconds (default: 30)')
     parser.add_argument('--parallelism', '-n', type=int, default=0,
                         help='Initial number of loops to start (default: 0, set via UI)')
+    parser.add_argument('--no-auto-drain', action='store_true',
+                        help='Skip the automatic drain when quota utilization reaches 90%%')
     args = parser.parse_args(argv)
 
     loop_script = Path(__file__).resolve().parent.parent / "loop" / "task_loop.sh"
@@ -1645,7 +1650,7 @@ def main(argv=None):
     except Exception as e:
         print(f"  (quota reset check: {e})")
 
-    state = SupervisorState(loop_script, base_loop_args)
+    state = SupervisorState(loop_script, base_loop_args, skip_auto_drain=args.no_auto_drain)
     state.set_parallelism(args.parallelism)
 
     # Start reaper thread
