@@ -1433,7 +1433,7 @@ function renderEventTimeline(events) {
     if (i === 0) {
       timeStr = d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
     } else {
-      const diffSec = Math.round((d.getTime() - t0) / 1000);
+      const diffSec = Math.round((d.getTime() - new Date(events[i - 1].at).getTime()) / 1000);
       const m = Math.floor(diffSec / 60);
       const s = diffSec % 60;
       timeStr = m > 0 ? `+${m}m ${s}s` : `+${s}s`;
