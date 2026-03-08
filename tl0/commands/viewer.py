@@ -9,6 +9,7 @@ import argparse
 import html
 import json
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -3426,9 +3427,16 @@ def main(argv=None):
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
     print(f'Task viewer → {url}  (Ctrl+C to stop)')
+
+    def _request_shutdown(signum, frame):
+        server._BaseServer__shutdown_request = True
+
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
+    finally:
         print('\nStopped.')
 
 

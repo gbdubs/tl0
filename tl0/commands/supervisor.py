@@ -1711,9 +1711,18 @@ def main(argv=None):
         print(f'  Loop args: {" ".join(base_loop_args)}')
     print(f'  Initial parallelism: {args.parallelism}')
 
+    # Register signal handlers that reliably stop serve_forever().
+    # Relying on KeyboardInterrupt alone is fragile on macOS when
+    # the server is actively handling a request (browser polls every 2s).
+    def _request_shutdown(signum, frame):
+        server._BaseServer__shutdown_request = True
+
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
+    finally:
         print('\nShutting down...')
         state.shutdown()
         deadline = time.time() + 10
