@@ -373,6 +373,45 @@ reconcile_generated_files() {
   fi
 }
 
+bump_meta_versions() {
+  # Auto-increment version and updated_at in meta.json for any case
+  # whose generated.xlsx is staged. This prevents pre-commit hook failures
+  # when tasks modify generated.xlsx without bumping meta.json.
+  local staged_xlsx
+  staged_xlsx=$(git -C "$CODE_REPO" diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '^cases/.*/generated\.xlsx$' || true)
+
+  if [ -z "$staged_xlsx" ]; then
+    return 0
+  fi
+
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  while IFS= read -r xlsx_path; do
+    local case_dir
+    case_dir=$(dirname "$xlsx_path")
+    local meta_path="$CODE_REPO/$case_dir/meta.json"
+
+    if [ ! -f "$meta_path" ]; then
+      continue
+    fi
+
+    python3 -c "
+import json, sys
+p, ts = sys.argv[1], sys.argv[2]
+with open(p) as f:
+    d = json.load(f)
+d['version'] = d.get('version', 0) + 1
+d['updated_at'] = ts
+with open(p, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\\n')
+" "$meta_path" "$now"
+
+    git -C "$CODE_REPO" add "$case_dir/meta.json" 2>/dev/null
+  done <<< "$staged_xlsx"
+}
+
 print_resume_instructions() {
   local task_id="$1"
   local short_id="$2"
@@ -497,6 +536,7 @@ merge_and_push() {
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      bump_meta_versions
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
         warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected."
@@ -556,6 +596,7 @@ merge_and_push() {
       continue
     fi
 
+    bump_meta_versions
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
       warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected."
