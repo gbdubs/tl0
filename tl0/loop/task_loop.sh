@@ -259,6 +259,10 @@ run_claude() {
   fi
 
   log "    Transcript [$seq-$label] saved ($(wc -l < "$transcript_file" | tr -d ' ') events)"
+
+  # Notify index of new transcript
+  tl0m index-notify --task "$TASK_ID" --transcript "$(basename "$transcript_file")" 2>/dev/null || true
+
   return $claude_exit
 }
 

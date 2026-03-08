@@ -114,6 +114,9 @@ def main():
     # transcript
     sub.add_parser("transcript", help="Show execution transcript for a task")
 
+    # index
+    sub.add_parser("index", help="Manage the SQLite task index")
+
     # catalog
     sub.add_parser("catalog", help="Build task catalog markdown for dependency auditing")
 
@@ -209,6 +212,10 @@ def main():
 
     elif cmd in ("reset-failed",):
         from tl0.commands.reset_failed import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("index",):
+        from tl0.commands.index_cmd import main as cmd_main
         cmd_main(remaining)
 
     else:
