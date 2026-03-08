@@ -840,6 +840,53 @@ mark {
 .modal-btn-danger { background: #dc2626; border: 1px solid #b91c1c; color: white; }
 .modal-btn-danger:hover { background: #b91c1c; }
 #delete-modal-error { color: #dc2626; font-size: 12px; margin-top: 8px; }
+
+/* ── Report Card view ─────────────────────────────────────── */
+#report-container {
+  display: none; flex: 1; flex-direction: column; overflow-y: auto;
+  padding: 24px 28px; background: var(--bg);
+}
+#report-container.visible { display: flex; }
+.rc-section { margin-bottom: 32px; }
+.rc-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--text-muted);
+  margin-bottom: 12px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.rc-stage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.rc-stage-label {
+  width: 80px; min-width: 80px; font-size: 11px; font-weight: 600;
+  color: var(--text); text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rc-stage-chart { flex: 1; }
+.rc-stage-chart svg { display: block; overflow: visible; }
+.rc-stage-ann { font-size: 10px; color: var(--text-muted); white-space: nowrap; min-width: 110px; }
+.rc-stat-cards { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+.rc-stat-card {
+  background: white; border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; min-width: 110px;
+}
+.rc-stat-card label {
+  display: block; font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--text-muted); margin-bottom: 4px;
+}
+.rc-stat-card value { display: block; font-size: 18px; font-weight: 700; color: var(--text); }
+.rc-stat-card small { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.rc-tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.rc-tool-card {
+  background: white; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+}
+.rc-tool-card-title {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px;
+}
+.rc-no-data {
+  display: flex; align-items: center; justify-content: center;
+  height: 120px; color: var(--text-muted); font-size: 13px;
+}
+.rc-axis-hint { font-size: 10px; color: #d1d5db; padding-left: 92px; margin-top: 2px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -854,6 +901,7 @@ mark {
       <button id="view-detail-item" onclick="setView('tree'); closeViewDropdown()">Detail</button>
       <button id="view-chart-item" onclick="setView('chart'); closeViewDropdown()">Chart</button>
       <button id="view-table-item" onclick="setView('table'); closeViewDropdown()">Table</button>
+      <button id="view-report-item" onclick="setView('report'); closeViewDropdown()">Report Card</button>
       <button id="view-sidebar-item" onclick="toggleSidebar(); closeViewDropdown()">Hide Sidebar</button>
     </div>
   </div>
@@ -921,6 +969,11 @@ mark {
       <table id="task-table"><thead><tr></tr></thead><tbody></tbody></table>
     </div>
   </div>
+
+  <div id="report-container">
+    <div id="report-loading" style="display:none;padding:24px;color:var(--text-muted)">Loading transcript data…</div>
+    <div id="report-content"></div>
+  </div>
 </div>
 
 <div id="delete-modal" style="display:none" onclick="closeDeleteModal(event)">
@@ -976,7 +1029,7 @@ function urlToState() {
   state.activeTags   = p.get('tags')   ? p.get('tags').split(',').filter(Boolean) : [];
   state.search       = p.get('q')      || '';
   const v = p.get('view');
-  state.view = (v && ['tree','chart','table'].includes(v)) ? v : 'table';
+  state.view = (v && ['tree','chart','table','report'].includes(v)) ? v : 'table';
   try {
     const f = p.get('filters');
     state.tableFilters = f ? JSON.parse(f) : [];
@@ -999,6 +1052,7 @@ window.addEventListener('popstate', () => {
   renderTaskList();
   if (state.view === 'chart') renderChart();
   else if (state.view === 'table') renderTable();
+  else if (state.view === 'report') renderReport();
   _updatingFromUrl = false;
 });
 
@@ -1055,6 +1109,7 @@ async function loadTasks() {
     renderTaskList();
     if (state.view === 'chart') renderChart();
     else if (state.view === 'table') renderTable();
+    else if (state.view === 'report') renderReport();
     if (_initialLoad) {
       _initialLoad = false;
       if (state.selectedId && taskMap[state.selectedId]) {
@@ -1616,19 +1671,22 @@ function getFiltered() {
 
 // ── Task list rendering ──────────────────────────────────────
 function _applyView(v) {
-  const isChart = v === 'chart';
-  const isTable = v === 'table';
+  const isChart  = v === 'chart';
+  const isTable  = v === 'table';
+  const isReport = v === 'report';
   // Keep task list visible in chart and table modes alongside the main view
   document.getElementById('task-list-container').style.display = '';
   // In chart mode: show detail only when a task is selected, otherwise show chart
   const chartShowsDetail = isChart && !!state.selectedId;
-  document.getElementById('detail').style.display = isTable ? 'none' : (isChart && !state.selectedId ? 'none' : '');
+  document.getElementById('detail').style.display = (isTable || isReport) ? 'none' : (isChart && !state.selectedId ? 'none' : '');
   document.getElementById('chart-container').classList.toggle('visible', isChart && !chartShowsDetail);
   document.getElementById('table-container').classList.toggle('visible', isTable);
+  document.getElementById('report-container').classList.toggle('visible', isReport);
   updateViewDropdownItems();
   renderTaskList();
   if (isChart && !state.selectedId) renderChart();
   else if (isTable) renderTable();
+  else if (isReport) renderReport();
 }
 function setView(v) {
   state.view = v;
@@ -1637,18 +1695,21 @@ function setView(v) {
   _applyView(v);
 }
 function updateViewDropdownItems() {
-  const isChart = state.view === 'chart';
-  const isTable = state.view === 'table';
+  const isChart  = state.view === 'chart';
+  const isTable  = state.view === 'table';
   const isDetail = state.view === 'tree';
+  const isReport = state.view === 'report';
   const detailItem = document.getElementById('view-detail-item');
   if (detailItem) detailItem.classList.toggle('active', isDetail);
   const chartItem = document.getElementById('view-chart-item');
   if (chartItem) chartItem.classList.toggle('active', isChart);
   const tableItem = document.getElementById('view-table-item');
   if (tableItem) tableItem.classList.toggle('active', isTable);
+  const reportItem = document.getElementById('view-report-item');
+  if (reportItem) reportItem.classList.toggle('active', isReport);
   const sidebarItem = document.getElementById('view-sidebar-item');
   if (sidebarItem) sidebarItem.textContent = state.sidebarVisible ? 'Hide Sidebar' : 'Show Sidebar';
-  document.getElementById('view-dropdown-btn').classList.toggle('active', isChart || isTable);
+  document.getElementById('view-dropdown-btn').classList.toggle('active', isChart || isTable || isReport);
 }
 function toggleViewDropdown() {
   const menu = document.getElementById('view-dropdown-menu');
@@ -1699,6 +1760,8 @@ function renderTaskList() {
     const sorted = [...filtered].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
     sorted.forEach(t => renderItem(t, container, 0, false));
   }
+  // Keep report card in sync when filters change
+  if (state.view === 'report') renderReport();
 }
 
 function renderTree(task, container, depth, filteredIds) {
@@ -2481,6 +2544,282 @@ window.addEventListener('resize', () => {
   clearTimeout(_chartResizeTimer);
   _chartResizeTimer = setTimeout(renderChart, 150);
 });
+
+// ── Report Card view ─────────────────────────────────────────
+const RC_PALETTE = [
+  '#3b82f6','#10b981','#8b5cf6','#f59e0b','#ef4444',
+  '#06b6d4','#84cc16','#f97316','#ec4899','#6366f1'
+];
+
+function _stageColor(stageName, allStageNames) {
+  const idx = allStageNames.indexOf(stageName);
+  return RC_PALETTE[idx >= 0 ? idx % RC_PALETTE.length : 0];
+}
+
+function _buildStageMetrics(tasks, txMap) {
+  const stageMap = {};
+  for (const task of tasks) {
+    const stageTag = (task.tags || []).find(t => t.startsWith('stage:'));
+    const stage = stageTag ? stageTag.replace('stage:', '') : '(no stage)';
+    if (!stageMap[stage]) {
+      stageMap[stage] = {
+        stage,
+        tasks: [], txTasks: [],
+        durations_ms: [], costs_usd: [], turns: [], toolErrors: [], toolCalls: [],
+        toolBreakdown: {},
+        modelCounts: { opus: 0, sonnet: 0, haiku: 0, other: 0 },
+        totalCost: 0, totalDuration_ms: 0, totalTurns: 0, totalToolErrors: 0,
+        taskCount: 0, txTaskCount: 0
+      };
+    }
+    const e = stageMap[stage];
+    e.tasks.push(task);
+    e.taskCount++;
+    // Model counts from task.model field
+    const m = (task.model || '').toLowerCase();
+    if (m.includes('opus'))   e.modelCounts.opus++;
+    else if (m.includes('sonnet')) e.modelCounts.sonnet++;
+    else if (m.includes('haiku'))  e.modelCounts.haiku++;
+    else e.modelCounts.other++;
+    // Transcript metrics
+    const tx = txMap[task.id];
+    if (!tx) continue;
+    e.txTasks.push(task);
+    e.txTaskCount++;
+    const dur  = tx.total_duration_ms || 0;
+    const cost = tx.total_cost_usd    || 0;
+    const errs = tx.total_tool_errors || 0;
+    let taskTurns = 0, taskCalls = 0;
+    for (const inv of (tx.invocations || [])) {
+      taskTurns += inv.num_turns || 0;
+      for (const [name, n] of Object.entries(inv.tool_usage || {})) {
+        taskCalls += n;
+        e.toolBreakdown[name] = (e.toolBreakdown[name] || 0) + n;
+      }
+    }
+    // Also check model from transcript invocation if task model is unset
+    if (!task.model) {
+      const invModel = (tx.invocations || [])[0]?.model || '';
+      const im = invModel.toLowerCase();
+      if (im.includes('opus'))        { e.modelCounts.other--; e.modelCounts.opus++; }
+      else if (im.includes('sonnet')) { e.modelCounts.other--; e.modelCounts.sonnet++; }
+      else if (im.includes('haiku'))  { e.modelCounts.other--; e.modelCounts.haiku++; }
+    }
+    e.durations_ms.push(dur);
+    e.costs_usd.push(cost);
+    e.turns.push(taskTurns);
+    e.toolErrors.push(errs);
+    e.toolCalls.push(taskCalls);
+    e.totalCost         += cost;
+    e.totalDuration_ms  += dur;
+    e.totalTurns        += taskTurns;
+    e.totalToolErrors   += errs;
+  }
+  return Object.values(stageMap).sort((a, b) => {
+    if (a.stage === '(no stage)') return 1;
+    if (b.stage === '(no stage)') return -1;
+    const na = Number(a.stage), nb = Number(b.stage);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.stage.localeCompare(b.stage);
+  });
+}
+
+function _rcFmtMs(ms) {
+  if (ms >= 3600000) return (ms / 3600000).toFixed(1) + 'h';
+  if (ms >= 60000)   return (ms / 60000).toFixed(1) + 'm';
+  if (ms >= 1000)    return (ms / 1000).toFixed(1) + 's';
+  return Math.round(ms) + 'ms';
+}
+function _rcFmtCost(v) { return '$' + v.toFixed(v < 0.01 ? 5 : 3); }
+function _rcFmtN(v)    { return String(Math.round(v)); }
+function _rcFmtTurns(v){ return v % 1 === 0 ? String(v) : v.toFixed(1); }
+
+function _renderDotPlot(values, globalMax, color, plotW, plotH, fmtFn) {
+  if (!values.length) {
+    return `<svg width="${plotW}" height="${plotH}"><text x="4" y="${plotH/2+4}" fill="#d1d5db" font-size="10">no data</text></svg>`;
+  }
+  const padL = 4, padR = 12;
+  const w = plotW - padL - padR;
+  const cy = plotH * 0.6;
+  const r  = 4;
+  function vx(v) { return padL + (globalMax > 0 ? (v / globalMax) * w : 0); }
+  // Bucket by rounded pixel for jitter
+  const buckets = {};
+  let dots = '';
+  for (const v of values) {
+    const x = Math.round(vx(v));
+    buckets[x] = (buckets[x] || 0);
+    const jitter = buckets[x] * (r * 2.2);
+    const y = Math.max(r + 1, cy - jitter);
+    buckets[x]++;
+    dots += `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.72"><title>${fmtFn ? fmtFn(v) : v}</title></circle>`;
+  }
+  const baseline = `<line x1="${padL}" y1="${cy + r + 2}" x2="${plotW - padR}" y2="${cy + r + 2}" stroke="#e5e7eb" stroke-width="1"/>`;
+  const avg  = values.reduce((s, v) => s + v, 0) / values.length;
+  const avgX = vx(avg);
+  const avgLine = `<line x1="${avgX}" y1="${cy - r - 2}" x2="${avgX}" y2="${cy + r + 2}" stroke="${color}" stroke-width="2.5" opacity="0.9"/>`;
+  return `<svg width="${plotW}" height="${plotH}">${baseline}${avgLine}${dots}</svg>`;
+}
+
+function _renderMetricSection(stageData, metricKey, title, fmtFn) {
+  const PLOT_W = 340, PLOT_H = 32;
+  const stageNames = stageData.map(e => e.stage);
+  const allVals = stageData.flatMap(e => e[metricKey]);
+  const globalMax = Math.max(1, ...allVals);
+  const totalAll = allVals.reduce((s, v) => s + v, 0);
+  const countAll = allVals.length;
+  let html = `<div class="rc-section"><div class="rc-section-title">${title}</div>`;
+  html += `<div class="rc-stat-cards">
+    <div class="rc-stat-card"><label>Total</label><value>${fmtFn(totalAll)}</value></div>
+    <div class="rc-stat-card"><label>Avg / task</label><value>${countAll ? fmtFn(totalAll / countAll) : '—'}</value></div>
+    <div class="rc-stat-card"><label>Tasks</label><value>${countAll}</value><small>with transcript</small></div>
+  </div>`;
+  for (let i = 0; i < stageData.length; i++) {
+    const e = stageData[i];
+    const vals = e[metricKey];
+    const color = _stageColor(e.stage, stageNames);
+    const avg = vals.length ? fmtFn(vals.reduce((a, b) => a + b, 0) / vals.length) : '—';
+    const tot = vals.length ? fmtFn(vals.reduce((a, b) => a + b, 0)) : '—';
+    html += `<div class="rc-stage-row">
+      <div class="rc-stage-label" title="${esc(e.stage)}">${esc(e.stage)}</div>
+      <div class="rc-stage-chart">${_renderDotPlot(vals, globalMax, color, PLOT_W, PLOT_H, fmtFn)}</div>
+      <div class="rc-stage-ann">avg ${avg} · tot ${tot} · n=${vals.length}</div>
+    </div>`;
+  }
+  html += `<div class="rc-axis-hint">← 0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${fmtFn(globalMax)} max →</div>`;
+  html += `</div>`;
+  return html;
+}
+
+function _renderGroupedBar(perStageValues, stageLabels, colors) {
+  const W = 200, H = 72;
+  const padT = 6, padB = 20, padL = 6, padR = 6;
+  const n  = stageLabels.length;
+  const chartW = W - padL - padR;
+  const barW   = Math.max(4, Math.min(28, chartW / n - 4));
+  const gap    = (chartW - barW * n) / (n + 1);
+  const maxVal = Math.max(1, ...perStageValues);
+  const chartH = H - padT - padB;
+  let svg = '';
+  for (let i = 0; i < n; i++) {
+    const v    = perStageValues[i];
+    const barH = (v / maxVal) * chartH;
+    const x    = padL + gap * (i + 1) + barW * i;
+    const y    = padT + chartH - barH;
+    svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${Math.max(1, barH).toFixed(1)}" fill="${colors[i]}" rx="2" opacity="0.85"><title>${esc(stageLabels[i])}: ${v}</title></rect>`;
+    const lbl = stageLabels[i].length > 5 ? stageLabels[i].slice(0, 5) : stageLabels[i];
+    svg += `<text x="${(x + barW / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle" fill="#9ca3af" font-size="9">${esc(lbl)}</text>`;
+  }
+  svg += `<line x1="${padL}" y1="${padT + chartH}" x2="${W - padR}" y2="${padT + chartH}" stroke="#e5e7eb" stroke-width="1"/>`;
+  svg += `<text x="${padL}" y="${padT + 9}" fill="#d1d5db" font-size="9">${maxVal}</text>`;
+  return `<svg width="${W}" height="${H}">${svg}</svg>`;
+}
+
+function _renderToolSection(stageData) {
+  const stageNames = stageData.map(e => e.stage);
+  const colors     = stageData.map((e, i) => _stageColor(e.stage, stageNames));
+  const allTools   = new Set();
+  stageData.forEach(e => Object.keys(e.toolBreakdown).forEach(t => allTools.add(t)));
+  const toolList = [...allTools].sort();
+  if (!toolList.length) return '';
+  let html = `<div class="rc-section"><div class="rc-section-title">Tool Calls by Tool</div><div class="rc-tool-grid">`;
+  for (const tool of toolList) {
+    const perStage = stageData.map(e => e.toolBreakdown[tool] || 0);
+    const total    = perStage.reduce((a, b) => a + b, 0);
+    html += `<div class="rc-tool-card">
+      <div class="rc-tool-card-title">${esc(tool)} <span style="font-weight:400;color:#9ca3af">(${total} total)</span></div>
+      ${_renderGroupedBar(perStage, stageNames, colors)}
+    </div>`;
+  }
+  html += `</div></div>`;
+  return html;
+}
+
+function _renderModelSection(stageData) {
+  const MODEL_COLORS = { opus: '#6d28d9', sonnet: '#1d4ed8', haiku: '#0e7490', other: '#6b7280' };
+  const MODEL_ORDER  = ['opus', 'sonnet', 'haiku', 'other'];
+  const BAR_W = 300, BAR_H = 14;
+  let html = `<div class="rc-section"><div class="rc-section-title">Model Distribution</div>`;
+  for (const e of stageData) {
+    const total = e.taskCount || 1;
+    let bars = '', xOff = 0;
+    for (const m of MODEL_ORDER) {
+      const n = e.modelCounts[m] || 0;
+      if (!n) continue;
+      const w = Math.max(1, Math.round((n / total) * BAR_W));
+      bars += `<rect x="${xOff}" y="0" width="${w}" height="${BAR_H}" fill="${MODEL_COLORS[m]}" rx="2"><title>${m}: ${n}</title></rect>`;
+      xOff += w;
+    }
+    const counts = MODEL_ORDER.filter(m => e.modelCounts[m])
+      .map(m => `<span style="color:${MODEL_COLORS[m]};font-weight:600">${m}</span> ${e.modelCounts[m]}`).join(' · ');
+    html += `<div class="rc-stage-row">
+      <div class="rc-stage-label" title="${esc(e.stage)}">${esc(e.stage)}</div>
+      <div class="rc-stage-chart"><svg width="${BAR_W}" height="${BAR_H}" style="border-radius:3px;overflow:hidden">${bars}</svg></div>
+      <div class="rc-stage-ann" style="font-size:11px">${counts || '<span style="color:#d1d5db">none</span>'}</div>
+    </div>`;
+  }
+  const legend = MODEL_ORDER.map(m =>
+    `<span><span style="display:inline-block;width:10px;height:10px;background:${MODEL_COLORS[m]};border-radius:2px;margin-right:4px;vertical-align:middle"></span>${m}</span>`
+  ).join('');
+  html += `<div style="display:flex;gap:14px;padding-top:8px;padding-left:92px;font-size:11px;color:var(--text-muted)">${legend}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+function _renderSummaryCards(stageData) {
+  const totCost  = stageData.reduce((s, e) => s + e.totalCost, 0);
+  const totDur   = stageData.reduce((s, e) => s + e.totalDuration_ms, 0);
+  const totTurns = stageData.reduce((s, e) => s + e.totalTurns, 0);
+  const totErrs  = stageData.reduce((s, e) => s + e.totalToolErrors, 0);
+  const totTasks = stageData.reduce((s, e) => s + e.taskCount, 0);
+  const txTasks  = stageData.reduce((s, e) => s + e.txTaskCount, 0);
+  const nStages  = stageData.length;
+  const errStyle = totErrs > 0 ? 'color:#dc2626' : '';
+  return `<div class="rc-stat-cards" style="margin-bottom:28px">
+    <div class="rc-stat-card"><label>Stages</label><value>${nStages}</value></div>
+    <div class="rc-stat-card"><label>Total Tasks</label><value>${totTasks}</value><small>${txTasks} with transcript</small></div>
+    <div class="rc-stat-card"><label>Total Cost</label><value>${_rcFmtCost(totCost)}</value></div>
+    <div class="rc-stat-card"><label>Total Duration</label><value>${_rcFmtMs(totDur)}</value></div>
+    <div class="rc-stat-card"><label>Total Turns</label><value>${totTurns}</value></div>
+    <div class="rc-stat-card"><label>Tool Errors</label><value style="${errStyle}">${totErrs}</value></div>
+  </div>`;
+}
+
+async function renderReport() {
+  if (state.view !== 'report') return;
+  const contentEl = document.getElementById('report-content');
+  const loadingEl = document.getElementById('report-loading');
+  if (!contentEl) return;
+
+  if (!_allTranscripts) {
+    loadingEl.style.display = '';
+    contentEl.innerHTML = '';
+    try {
+      const res = await fetch('/api/all-transcripts');
+      _allTranscripts = await res.json();
+    } catch (_) { _allTranscripts = {}; }
+    loadingEl.style.display = 'none';
+  }
+
+  const tasks     = getFiltered();
+  const stageData = _buildStageMetrics(tasks, _allTranscripts);
+
+  if (!stageData.length) {
+    contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
+    return;
+  }
+
+  let html = _renderSummaryCards(stageData);
+  html += _renderMetricSection(stageData, 'durations_ms', 'Latency', _rcFmtMs);
+  html += _renderMetricSection(stageData, 'turns',        'Turns',   _rcFmtTurns);
+  html += _renderMetricSection(stageData, 'costs_usd',    'Cost (USD)', _rcFmtCost);
+  html += _renderMetricSection(stageData, 'toolErrors',   'Tool Errors', _rcFmtN);
+  html += _renderMetricSection(stageData, 'toolCalls',    'Total Tool Calls', _rcFmtN);
+  html += _renderToolSection(stageData);
+  html += _renderModelSection(stageData);
+
+  contentEl.innerHTML = html;
+}
 
 // ── Table view ───────────────────────────────────────────────
 let _allTranscripts = null;

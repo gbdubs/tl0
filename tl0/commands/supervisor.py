@@ -930,9 +930,12 @@ function render() {
     html += '<th>Task</th><th>Duration</th><th>Exit</th><th>Finished</th><th></th>';
     html += '</tr></thead><tbody>';
     for (const h of state.history.slice().reverse()) {
-      const title = h.task_title
+      const titleText = h.task_title
         ? escHtml(h.task_title)
         : '<span style="color:var(--text-muted)">' + escHtml(h.slot_id) + '</span>';
+      const title = h.task_id
+        ? '<a href="/viewer/?id=' + encodeURIComponent(h.task_id) + '" style="color:inherit; text-decoration:underline; text-decoration-color:var(--text-muted); text-underline-offset:2px">' + titleText + '</a>'
+        : titleText;
       const dur = (h.finished_at && h.started_at)
         ? formatElapsed(h.finished_at - h.started_at)
         : '-';
