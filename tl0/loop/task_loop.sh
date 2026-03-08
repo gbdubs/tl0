@@ -396,17 +396,24 @@ bump_meta_versions() {
       continue
     fi
 
+    # Read the HEAD (main) version of meta.json to ensure we bump past it.
+    # If the task branch is behind main, the staged version may be stale;
+    # using max(staged, HEAD) + 1 guarantees a strictly higher version.
+    local head_version
+    head_version=$(git -C "$CODE_REPO" show HEAD:"$case_dir/meta.json" 2>/dev/null \
+      | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',0))" 2>/dev/null || echo 0)
+
     python3 -c "
 import json, sys
-p, ts = sys.argv[1], sys.argv[2]
+p, ts, hv = sys.argv[1], sys.argv[2], int(sys.argv[3])
 with open(p) as f:
     d = json.load(f)
-d['version'] = d.get('version', 0) + 1
+d['version'] = max(d.get('version', 0), hv) + 1
 d['updated_at'] = ts
 with open(p, 'w') as f:
     json.dump(d, f, indent=2)
     f.write('\\n')
-" "$meta_path" "$now"
+" "$meta_path" "$now" "$head_version"
 
     git -C "$CODE_REPO" add "$case_dir/meta.json" 2>/dev/null
   done <<< "$staged_xlsx"
@@ -539,10 +546,23 @@ merge_and_push() {
       bump_meta_versions
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
-        warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected."
+        warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected. Merging main into task branch and retrying..."
         git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
         git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-        break
+
+        _release_merge_lock
+        if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt"; then
+          warn "Could not merge main into task branch after pre-commit failure. Aborting retries."
+          _acquire_merge_lock 2>/dev/null || true
+          break
+        fi
+        reconcile_generated_files "$worktree"
+        if ! _acquire_merge_lock; then
+          warn "Could not re-acquire merge lock after pre-commit fixup. Aborting retries."
+          break
+        fi
+        sleep $((1 + RANDOM % 3))
+        continue
       fi
       sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       # If commit was a no-op (no changes), don't record a stale SHA
@@ -599,10 +619,11 @@ merge_and_push() {
     bump_meta_versions
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
-      warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected."
+      warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected. Retrying..."
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-      break
+      sleep $((1 + RANDOM % 3))
+      continue
     fi
     sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     if [ "$sha_candidate" = "$pre_commit_sha" ]; then
