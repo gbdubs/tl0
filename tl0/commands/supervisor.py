@@ -33,7 +33,7 @@ from tl0.common import (
     task_updated_at, TRANSCRIPTS_FOLDER,
 )
 from tl0.config import load_config
-from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary, _build_transcript_messages, _build_transcript_timeline
+from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_messages, _build_transcript_timeline
 
 
 # ──────────────────────────────────────────────────────────────────────────────
