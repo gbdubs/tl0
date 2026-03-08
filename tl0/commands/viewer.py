@@ -3991,23 +3991,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif path == '/api/tasks':
-            raw = load_all_tasks()
-            # Inject derived fields so the frontend can treat them as plain properties
-            tasks = []
-            for t in raw:
-                t = dict(t)
-                t["status"]        = task_status(t)
-                t["claimed_by"]    = task_claimed_by(t)
-                t["claimed_at"]    = task_last_claimed_at(t)
-                t["completed_at"]  = task_completed_at(t)
-                t["created_at"]    = task_created_at(t)
-                t["updated_at"]    = task_updated_at(t)
-                t["parent_task"]   = t.get("created_by")
-                t["source"]        = t.get("created_by") or "human"
-                tasks.append(t)
-            # Derive tasks_created by scanning created_by references
-            for t in tasks:
-                t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
+            from tl0.common import _get_index
+            tasks = _get_index().get_all_tasks()
             body  = json.dumps(tasks).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -4016,12 +4001,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif path == '/api/all-transcripts':
-            # Bulk transcript summaries for all tasks (used by table view)
-            result = {}
-            if TRANSCRIPTS_FOLDER.is_dir():
-                for td in TRANSCRIPTS_FOLDER.iterdir():
-                    if td.is_dir():
-                        result[td.name] = _build_transcript_summary(td.name)
+            from tl0.common import _get_index
+            result = _get_index().get_all_transcript_summaries()
             body = json.dumps(result).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -4031,7 +4012,8 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path.startswith('/api/transcripts/'):
             task_id = path.split('/')[-1]
-            summary = _build_transcript_summary(task_id)
+            from tl0.common import _get_index
+            summary = _get_index().get_transcript_summary(task_id)
             body = json.dumps(summary).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')

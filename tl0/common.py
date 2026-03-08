@@ -18,6 +18,22 @@ TRANSCRIPTS_FOLDER = TASKS_DIR / "transcripts"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.json"
 
 VALID_STATUSES = {"pending", "claimed", "done", "failed"}
+
+# Lazy singleton for the SQLite index
+_index_instance = None
+
+
+def _get_index():
+    """Return the shared Index instance, creating it on first call.
+
+    Re-resolves TASKS_DIR each time to handle -C / chdir before import.
+    """
+    global _index_instance
+    tasks_dir = resolve_tasks_dir(load_config())
+    if _index_instance is None or _index_instance._tasks_dir != tasks_dir:
+        from tl0.index import Index
+        _index_instance = Index(tasks_dir)
+    return _index_instance
 VALID_MODELS = set(_config.get("valid_models", ["opus", "sonnet", "haiku"]))
 
 REQUIRED_FIELDS = {
@@ -232,6 +248,10 @@ def save_task(task: dict):
     with open(path, "w") as f:
         json.dump(task, f, indent=2)
         f.write("\n")
+    try:
+        _get_index().notify_task_changed(task["id"])
+    except Exception:
+        pass  # index update is best-effort
 
 
 def load_all_tasks() -> list[dict]:

@@ -59,6 +59,9 @@ def main():
     # fail — requires TL0_TASK_ID; task ID defaults to TL0_TASK_ID
     sub.add_parser("fail", help="Mark the current task as failed (unrecoverable; different from done)")
 
+    # index-notify — update index after transcript write
+    sub.add_parser("index-notify", help="Notify index of task/transcript changes")
+
     args, remaining = parser.parse_known_args()
 
     if args.command is None:
@@ -98,6 +101,10 @@ def main():
 
     elif cmd in ("fail",):
         from tl0.commands.fail import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("index-notify",):
+        from tl0.commands.index_notify import main as cmd_main
         cmd_main(remaining)
 
     else:

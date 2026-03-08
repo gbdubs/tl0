@@ -1323,16 +1323,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             self._respond_json(self.state.get_snapshot())
 
         elif path == '/api/tasks':
-            raw = load_all_tasks()
-            tasks = []
-            for t in raw:
-                t = dict(t)
-                t["status"]        = task_status(t)
-                t["claimed_by"]    = task_claimed_by(t)
-                t["claimed_at"]    = task_last_claimed_at(t)
-                t["completed_at"]  = task_completed_at(t)
-                t["created_at"]    = task_created_at(t)
-                tasks.append(t)
+            from tl0.common import _get_index
+            tasks = _get_index().get_all_tasks()
             self._respond_json(tasks)
 
         elif path == '/api/quota':
@@ -1387,22 +1379,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             self._respond(200, self.viewer_favicon_svg, 'image/svg+xml')
 
         elif path == '/viewer/api/tasks':
-            raw = load_all_tasks()
-            tasks = []
-            for t in raw:
-                t = dict(t)
-                t["status"]        = task_status(t)
-                t["claimed_by"]    = task_claimed_by(t)
-                t["claimed_at"]    = task_last_claimed_at(t)
-                t["completed_at"]  = task_completed_at(t)
-                t["created_at"]    = task_created_at(t)
-                t["updated_at"]    = task_updated_at(t)
-                t["parent_task"]   = t.get("created_by")
-                tasks.append(t)
-            # Derive tasks_created by scanning created_by references
-            for t in tasks:
-                t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
-            self._respond_json(tasks)
+            from tl0.common import _get_index
+            self._respond_json(_get_index().get_all_tasks())
 
         elif path.startswith('/viewer/api/transcript-timeline/'):
             parts = path.split('/')
@@ -1450,15 +1428,12 @@ class SupervisorHandler(BaseHTTPRequestHandler):
 
         elif path.startswith('/viewer/api/transcripts/'):
             task_id = path.split('/')[-1]
-            self._respond_json(_build_transcript_summary(task_id))
+            from tl0.common import _get_index
+            self._respond_json(_get_index().get_transcript_summary(task_id))
 
         elif path == '/viewer/api/all-transcripts':
-            result = {}
-            if TRANSCRIPTS_FOLDER.is_dir():
-                for td in TRANSCRIPTS_FOLDER.iterdir():
-                    if td.is_dir():
-                        result[td.name] = _build_transcript_summary(td.name)
-            self._respond_json(result)
+            from tl0.common import _get_index
+            self._respond_json(_get_index().get_all_transcript_summaries())
 
         elif path.startswith('/viewer/api/loop-log/'):
             task_id = path.split('/')[-1]
