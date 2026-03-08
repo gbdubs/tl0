@@ -33,7 +33,7 @@ from tl0.common import (
     task_updated_at, TRANSCRIPTS_FOLDER,
 )
 from tl0.config import load_config
-from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary, _build_transcript_messages
+from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_summary, _build_transcript_messages, _build_transcript_timeline
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1362,7 +1362,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
                 .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
                 .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'") \
-                .replace("fetch(`/api/transcript-raw/", "fetch(`/viewer/api/transcript-raw/")
+                .replace("fetch(`/api/transcript-raw/", "fetch(`/viewer/api/transcript-raw/") \
+                .replace("fetch(`/api/transcript-timeline/", "fetch(`/viewer/api/transcript-timeline/")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
@@ -1402,6 +1403,17 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             for t in tasks:
                 t["tasks_created"] = [o["id"] for o in tasks if o.get("created_by") == t["id"]]
             self._respond_json(tasks)
+
+        elif path.startswith('/viewer/api/transcript-timeline/'):
+            parts = path.split('/')
+            # /viewer/api/transcript-timeline/<task_id>/<filename>
+            if len(parts) >= 6:
+                task_id = parts[4]
+                filename = parts[5]
+                self._respond_json(_build_transcript_timeline(task_id, filename))
+            else:
+                self.send_response(404)
+                self.end_headers()
 
         elif path.startswith('/viewer/api/transcript-messages/'):
             parts = path.split('/')

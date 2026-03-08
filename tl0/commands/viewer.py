@@ -668,6 +668,54 @@ body {
 .exec-invocation { cursor: pointer; transition: background 0.1s; }
 .exec-invocation:hover { background: #eef2ff; }
 
+/* ── Compact timeline view ─────────────────────────────────── */
+.tl-row {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 8px; font-size: 12px; line-height: 1.5;
+  border-radius: 4px; cursor: pointer; min-height: 22px;
+}
+.tl-row:hover { background: #f0f4f8; }
+.tl-row.tl-error { background: #fef2f2; }
+.tl-row.tl-error:hover { background: #fee2e2; }
+.tl-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 13px; }
+.tl-tool {
+  font-weight: 600; font-size: 11px; min-width: 50px; flex-shrink: 0;
+  font-family: 'SFMono-Regular', Consolas, monospace; color: #0369a1;
+}
+.tl-label {
+  flex: 1; color: #374151; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-label code {
+  background: #f3f4f6; padding: 0 3px; border-radius: 3px;
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px;
+}
+.tl-meta {
+  color: #9ca3af; font-size: 11px; flex-shrink: 0; white-space: nowrap;
+}
+.tl-meta.tl-meta-err { color: #dc2626; font-weight: 600; }
+.tl-row.tl-thinking { opacity: 0.55; }
+.tl-row.tl-thinking .tl-label { font-style: italic; }
+.tl-row.tl-text .tl-label { color: #1f2937; }
+.tl-row.tl-user .tl-label { color: #6b7280; }
+.tl-detail {
+  display: none; margin: 0 0 4px 22px; padding: 6px 10px;
+  background: #f9fafb; border: 1px solid var(--border); border-radius: 6px;
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  max-height: 400px; overflow-y: auto;
+}
+.tl-detail-section {
+  margin-bottom: 6px;
+}
+.tl-detail-heading {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: #9ca3af; margin-bottom: 2px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.tl-diff-old { background: #fecaca; padding: 1px 2px; border-radius: 2px; }
+.tl-diff-new { background: #bbf7d0; padding: 1px 2px; border-radius: 2px; }
+
 
 /* ── Search snippets & highlights ──────────────────────────── */
 .t-snippet {
@@ -1244,20 +1292,81 @@ async function fetchTranscript(taskId) {
 
 async function showInvocationDetail(taskId, filename) {
   try {
-    const res = await fetch(`/api/transcript-messages/${taskId}/${filename}`);
-    if (!res.ok) {
-      const errText = await res.text().catch(() => res.statusText);
-      console.error(`Transcript load failed (${res.status}): ${errText}`);
-      alert(`Failed to load transcript: ${res.status} ${res.statusText}`);
-      return;
+    // Fetch timeline data for the default tab
+    const tlRes = await fetch(`/api/transcript-timeline/${taskId}/${filename}`);
+    let timelineHtml = '';
+    if (tlRes.ok) {
+      const timeline = await tlRes.json();
+      timelineHtml = renderTimeline(timeline);
+    } else {
+      timelineHtml = '<div style="color:#9ca3af;padding:12px">Failed to load timeline.</div>';
     }
-    const messages = await res.json();
     const overlay = document.createElement('div');
     overlay.className = 'log-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="conv-panel">
+      <div class="conv-panel-header">
+        <h3>Execution — ${esc(filename)}</h3>
+        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">\u2715</button>
+      </div>
+      <div class="conv-tab-bar">
+        <button class="conv-tab active" data-tab="timeline" onclick="switchConvTab(this)">Timeline</button>
+        <button class="conv-tab" data-tab="conversation" onclick="switchConvTab(this)">Conversation</button>
+        <button class="conv-tab" data-tab="raw-json" onclick="switchConvTab(this)">Raw JSON</button>
+      </div>
+      <div class="conv-panel-body">
+        <div class="conv-tab-content active" id="tab-timeline">${timelineHtml}</div>
+        <div class="conv-tab-content" id="tab-conversation"><div style="color:#9ca3af;padding:12px">Loading\u2026</div></div>
+        <div class="conv-tab-content" id="tab-raw-json"><div class="conv-raw-json">Loading\u2026</div></div>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay._convLoaded = false;
+    overlay._rawLoaded = false;
+    overlay._taskId = taskId;
+    overlay._filename = filename;
+  } catch (_) {}
+}
+
+function renderTimeline(entries) {
+  let html = '';
+  entries.forEach((e, i) => {
+    const errCls = e.is_error ? ' tl-error' : '';
+    const kindCls = e.kind === 'thinking' ? ' tl-thinking' : e.kind === 'text' ? ' tl-text' : e.kind === 'user' ? ' tl-user' : '';
+    const hasDetail = e.detail_input || e.detail_output;
+    const detailId = 'tld-' + i;
+    html += `<div class="tl-row${errCls}${kindCls}" ${hasDetail ? `onclick="toggleConvEl('${detailId}')"` : ''}>`;
+    html += `<span class="tl-icon">${e.icon}</span>`;
+    if (e.tool) {
+      html += `<span class="tl-tool">${esc(e.tool)}</span>`;
+    }
+    html += `<span class="tl-label">${esc(e.label)}</span>`;
+    if (e.meta) {
+      const metaCls = e.is_error ? 'tl-meta tl-meta-err' : 'tl-meta';
+      html += `<span class="${metaCls}">${esc(e.meta)}</span>`;
+    }
+    html += `</div>`;
+    if (hasDetail) {
+      html += `<div class="tl-detail" id="${detailId}">`;
+      if (e.detail_input) {
+        html += `<div class="tl-detail-section"><div class="tl-detail-heading">Input</div>${esc(e.detail_input)}</div>`;
+      }
+      if (e.detail_output) {
+        html += `<div class="tl-detail-section"><div class="tl-detail-heading">Output</div>${esc(e.detail_output)}</div>`;
+      }
+      html += `</div>`;
+    }
+  });
+  return html || '<div style="color:#9ca3af;padding:12px">No actions recorded.</div>';
+}
+
+async function loadConversation(taskId, filename, container) {
+  try {
+    const res = await fetch(`/api/transcript-messages/${taskId}/${filename}`);
+    if (!res.ok) { container.innerHTML = '<div style="color:#dc2626;padding:12px">Failed to load conversation.</div>'; return; }
+    const messages = await res.json();
     let body = '';
     let blockCounter = 0;
-    // Pre-index tool results by tool_use_id so we can render them inline
     const toolResults = {};
     messages.forEach(msg => {
       if (msg.role === 'tool_result' && msg.tool_use_id) {
@@ -1317,28 +1426,11 @@ async function showInvocationDetail(taskId, filename) {
           }
         });
       }
-      // tool_result messages are rendered inline above, skip standalone rendering
     });
-    overlay.innerHTML = `<div class="conv-panel">
-      <div class="conv-panel-header">
-        <h3>Execution — ${esc(filename)}</h3>
-        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
-      </div>
-      <div class="conv-tab-bar">
-        <button class="conv-tab active" data-tab="conversation" onclick="switchConvTab(this)">Conversation</button>
-        <button class="conv-tab" data-tab="raw-json" onclick="switchConvTab(this)">Raw JSON</button>
-      </div>
-      <div class="conv-panel-body">
-        <div class="conv-tab-content active" id="tab-conversation">${body}</div>
-        <div class="conv-tab-content" id="tab-raw-json"><div class="conv-raw-json">Loading…</div></div>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    // Lazy-load raw JSON when that tab is first activated
-    overlay._rawLoaded = false;
-    overlay._taskId = taskId;
-    overlay._filename = filename;
-  } catch (_) {}
+    container.innerHTML = body || '<div style="color:#9ca3af;padding:12px">No messages.</div>';
+  } catch (e) {
+    container.innerHTML = '<div style="color:#dc2626;padding:12px">Error loading conversation.</div>';
+  }
 }
 
 function switchConvTab(btn) {
@@ -1348,8 +1440,12 @@ function switchConvTab(btn) {
   const tabName = btn.dataset.tab;
   panel.querySelectorAll('.conv-tab-content').forEach(c => c.classList.remove('active'));
   panel.querySelector('#tab-' + tabName).classList.add('active');
+  const overlay = panel.closest('.log-overlay');
+  if (tabName === 'conversation' && !overlay._convLoaded) {
+    overlay._convLoaded = true;
+    loadConversation(overlay._taskId, overlay._filename, panel.querySelector('#tab-conversation'));
+  }
   if (tabName === 'raw-json') {
-    const overlay = panel.closest('.log-overlay');
     if (!overlay._rawLoaded) {
       overlay._rawLoaded = true;
       loadRawJson(overlay._taskId, overlay._filename, panel.querySelector('#tab-raw-json'));
@@ -3420,6 +3516,333 @@ def _build_transcript_messages(task_id: str, filename: str) -> list:
     return messages
 
 
+def _shorten_path(filepath: str, cwd: str) -> str:
+    """Strip cwd prefix and worktree paths to produce a short relative path."""
+    if not filepath:
+        return ""
+    # Strip .task-worktrees/<hash>/ pattern
+    m = re.search(r'\.task-worktrees/[0-9a-f]+/(.+)', filepath)
+    if m:
+        return m.group(1)
+    if cwd and filepath.startswith(cwd):
+        rel = filepath[len(cwd):]
+        return rel.lstrip("/")
+    # Just return the last 2-3 path components
+    parts = filepath.split("/")
+    if len(parts) > 3:
+        return "/".join(parts[-3:])
+    return filepath
+
+
+def _summarize_tool_result(tool_name: str, result_text: str, is_error: bool) -> str:
+    """Extract a short summary string from a tool result."""
+    if is_error:
+        first_line = result_text.split("\n")[0][:60] if result_text else "error"
+        return first_line
+    if not result_text:
+        return ""
+    lines = result_text.split("\n")
+    non_empty = [l for l in lines if l.strip()]
+    if tool_name == "Read":
+        return f"{len(non_empty)} lines"
+    if tool_name in ("Glob", "Grep"):
+        if non_empty:
+            return f"{len(non_empty)} matches"
+        return "0 matches"
+    if tool_name in ("Edit", "Write"):
+        if "has been updated" in result_text or "created" in result_text:
+            return ""
+        return result_text.split("\n")[0][:60]
+    if tool_name == "Bash":
+        if not non_empty:
+            return ""
+        if len(non_empty) == 1:
+            return non_empty[0][:80]
+        return f"{len(non_empty)} lines"
+    if tool_name in ("WebSearch", "WebFetch"):
+        if not non_empty:
+            return ""
+        return f"{len(non_empty)} lines"
+    return ""
+
+
+def _build_transcript_timeline(task_id: str, filename: str) -> list:
+    """Build a compact timeline of actions from a transcript JSONL file.
+
+    Returns a list of timeline entry dicts, each with:
+      kind: "tool"|"thinking"|"text"|"user"
+      tool: tool name (for kind=tool)
+      icon: emoji character
+      label: primary display text
+      meta: secondary info (line count, match count, etc.)
+      is_error: bool
+      detail_input: full tool input (for expansion)
+      detail_output: full tool result (for expansion)
+    """
+    filepath = TRANSCRIPTS_FOLDER / task_id / filename
+    if not filepath.exists():
+        return []
+
+    events = []
+    for line in filepath.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    # Extract cwd from init event
+    cwd = ""
+    for e in events:
+        if e.get("type") == "system" and e.get("subtype") == "init":
+            cwd = e.get("cwd", "")
+            break
+
+    # Collect tool_use blocks and tool_result blocks, keyed by tool_use_id
+    tool_uses: dict[str, dict] = {}  # id -> {name, input}
+    tool_results: dict[str, dict] = {}  # id -> {text, is_error}
+
+    # Collect messages in order (deduplicated assistant messages)
+    messages = []
+    seen_assistant_ids: set[str] = set()
+
+    for e in events:
+        if e.get("type") == "assistant":
+            msg = e.get("message", {})
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            msg_id = msg.get("id", "")
+            if msg_id and msg_id in seen_assistant_ids:
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("_msg_id") == msg_id:
+                        messages[i] = {"role": "assistant", "content": content, "_msg_id": msg_id}
+                        break
+            else:
+                if msg_id:
+                    seen_assistant_ids.add(msg_id)
+                messages.append({"role": "assistant", "content": content, "_msg_id": msg_id})
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_uses[block.get("id", "")] = {
+                        "name": block.get("name", "unknown"),
+                        "input": block.get("input", {}),
+                    }
+        elif e.get("type") == "user":
+            msg = e.get("message", {})
+            content = msg.get("content", [])
+            if isinstance(content, str):
+                if content.strip():
+                    messages.append({"role": "user", "text": content})
+                continue
+            if not isinstance(content, list):
+                continue
+            has_text = any(
+                isinstance(b, dict) and b.get("type") == "text"
+                for b in content
+            )
+            if has_text:
+                text_parts = []
+                for block in content:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                combined = "\n".join(text_parts)
+                if combined.strip():
+                    messages.append({"role": "user", "text": combined})
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tuid = block.get("tool_use_id", "")
+                    rc = block.get("content", "")
+                    if isinstance(rc, list):
+                        rc = "\n".join(
+                            b.get("text", "") for b in rc
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    elif not isinstance(rc, str):
+                        rc = str(rc)
+                    tool_results[tuid] = {
+                        "text": rc,
+                        "is_error": bool(block.get("is_error")),
+                    }
+
+    # Build timeline entries
+    timeline = []
+    _TOOL_ICONS = {
+        "Bash": "\U0001f5a5",      # 🖥️
+        "Read": "\U0001f4d6",      # 📖
+        "Edit": "\u270f\ufe0f",    # ✏️
+        "Write": "\U0001f4dd",     # 📝
+        "Glob": "\U0001f50d",      # 🔍
+        "Grep": "\U0001f50e",      # 🔎
+        "Agent": "\U0001f916",     # 🤖
+        "WebSearch": "\U0001f310", # 🌐
+        "WebFetch": "\U0001f517",  # 🔗
+        "ToolSearch": "\U0001f527",# 🔧
+        "TodoWrite": "\U0001f4cb", # 📋
+    }
+
+    for msg in messages:
+        if msg.get("role") == "user":
+            text = msg.get("text", "")
+            first_line = text.split("\n")[0][:120]
+            timeline.append({
+                "kind": "user",
+                "icon": "\U0001f464",  # 👤
+                "tool": "",
+                "label": first_line,
+                "meta": "",
+                "is_error": False,
+                "detail_input": "",
+                "detail_output": text[:5000] if len(text) > 120 else "",
+            })
+            continue
+
+        content = msg.get("content", [])
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            bt = block.get("type")
+
+            if bt == "thinking":
+                thinking_text = block.get("thinking", "")
+                if not thinking_text:
+                    continue
+                first_line = thinking_text.split("\n")[0][:120]
+                timeline.append({
+                    "kind": "thinking",
+                    "icon": "\U0001f4ad",  # 💭
+                    "tool": "",
+                    "label": first_line,
+                    "meta": f"{len(thinking_text)} chars",
+                    "is_error": False,
+                    "detail_input": "",
+                    "detail_output": thinking_text[:5000],
+                })
+
+            elif bt == "text":
+                text = block.get("text", "")
+                if not text:
+                    continue
+                first_line = text.split("\n")[0][:120]
+                timeline.append({
+                    "kind": "text",
+                    "icon": "\U0001f4ac",  # 💬
+                    "tool": "",
+                    "label": first_line,
+                    "meta": "",
+                    "is_error": False,
+                    "detail_input": "",
+                    "detail_output": text[:5000] if len(text) > 120 else "",
+                })
+
+            elif bt == "tool_use":
+                tuid = block.get("id", "")
+                name = block.get("name", "unknown")
+                inp = block.get("input", {})
+                result = tool_results.get(tuid, {})
+                result_text = result.get("text", "")
+                is_error = result.get("is_error", False)
+                icon = _TOOL_ICONS.get(name, "\u2699\ufe0f")  # ⚙️
+
+                # Tool-specific label and meta
+                label = ""
+                meta = ""
+                detail_input = ""
+
+                if name == "Bash":
+                    label = inp.get("description", "") or inp.get("command", "")[:80]
+                    detail_input = inp.get("command", "")
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "Read":
+                    fp = _shorten_path(inp.get("file_path", ""), cwd)
+                    meta_parts = []
+                    if inp.get("offset") or inp.get("limit"):
+                        if inp.get("offset") and inp.get("limit"):
+                            meta_parts.append(f"lines {inp['offset']}-{inp['offset']+inp['limit']}")
+                        elif inp.get("limit"):
+                            meta_parts.append(f"{inp['limit']} lines")
+                    result_summary = _summarize_tool_result(name, result_text, is_error)
+                    if result_summary and not meta_parts:
+                        meta_parts.append(result_summary)
+                    label = fp
+                    meta = ", ".join(meta_parts)
+                elif name == "Edit":
+                    fp = _shorten_path(inp.get("file_path", ""), cwd)
+                    old_len = len(inp.get("old_string", ""))
+                    new_len = len(inp.get("new_string", ""))
+                    label = fp
+                    if inp.get("replace_all"):
+                        meta = f"replace all ({old_len}\u2192{new_len} chars)"
+                    else:
+                        meta = f"{old_len}\u2192{new_len} chars"
+                    detail_input = f"--- old ({old_len} chars) ---\n{inp.get('old_string', '')}\n\n+++ new ({new_len} chars) +++\n{inp.get('new_string', '')}"
+                elif name == "Write":
+                    fp = _shorten_path(inp.get("file_path", ""), cwd)
+                    content_len = len(inp.get("content", ""))
+                    label = fp
+                    meta = f"{content_len} chars"
+                    detail_input = inp.get("content", "")[:3000]
+                elif name == "Glob":
+                    label = inp.get("pattern", "")
+                    if inp.get("path"):
+                        label += f" in {_shorten_path(inp['path'], cwd)}"
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "Grep":
+                    pat = inp.get("pattern", "")
+                    path = _shorten_path(inp.get("path", ""), cwd)
+                    label = f"'{pat}'"
+                    if path:
+                        label += f" in {path}"
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "Agent":
+                    label = inp.get("description", "")
+                    st = inp.get("subagent_type", "")
+                    if st:
+                        label = f"[{st}] {label}"
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "WebSearch":
+                    label = inp.get("query", "")
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "WebFetch":
+                    url = inp.get("url", "")
+                    # Shorten URL: strip scheme, truncate
+                    url_short = re.sub(r'^https?://(www\.)?', '', url)
+                    if len(url_short) > 60:
+                        url_short = url_short[:57] + "..."
+                    label = url_short
+                    meta = _summarize_tool_result(name, result_text, is_error)
+                elif name == "ToolSearch":
+                    continue  # internal plumbing, skip in timeline
+                elif name == "TodoWrite":
+                    continue  # internal plumbing, skip in timeline
+                else:
+                    label = json.dumps(inp)[:80]
+                    meta = _summarize_tool_result(name, result_text, is_error)
+
+                if not detail_input:
+                    detail_input = json.dumps(inp, indent=2)
+
+                # Truncate detail output
+                detail_output = result_text[:5000] if result_text else ""
+
+                timeline.append({
+                    "kind": "tool",
+                    "icon": icon,
+                    "tool": name,
+                    "label": label,
+                    "meta": meta,
+                    "is_error": is_error,
+                    "detail_input": detail_input,
+                    "detail_output": detail_output,
+                })
+
+    return timeline
+
+
 def _build_transcript_summary(task_id: str) -> dict:
     """Build a JSON-serialisable summary of transcript data for a task."""
     transcript_dir = TRANSCRIPTS_FOLDER / task_id
@@ -3612,6 +4035,35 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     messages = _build_transcript_messages(task_id, filename)
                     body = json.dumps(messages).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as exc:
+                    err = json.dumps({"error": str(exc), "task_id": task_id, "filename": filename}).encode('utf-8')
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
+            else:
+                err = json.dumps({"error": "Bad request", "path": path}).encode('utf-8')
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+
+        elif path.startswith('/api/transcript-timeline/'):
+            parts = path.split('/')
+            # /api/transcript-timeline/<task_id>/<filename>
+            if len(parts) >= 5:
+                task_id = parts[3]
+                filename = parts[4]
+                try:
+                    timeline = _build_transcript_timeline(task_id, filename)
+                    body = json.dumps(timeline).encode('utf-8')
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json; charset=utf-8')
                     self.send_header('Content-Length', str(len(body)))
