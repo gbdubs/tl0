@@ -2559,8 +2559,8 @@ function _stageColor(stageName, allStageNames) {
 function _buildStageMetrics(tasks, txMap) {
   const stageMap = {};
   for (const task of tasks) {
-    const stageTag = (task.tags || []).find(t => t.startsWith('stage:'));
-    const stage = stageTag ? stageTag.replace('stage:', '') : '(no stage)';
+    const stageTag = (task.tags || []).find(t => t.startsWith('phase:'));
+    const stage = stageTag ? stageTag.replace('phase:', '') : '(no phase)';
     if (!stageMap[stage]) {
       stageMap[stage] = {
         stage,
@@ -2616,8 +2616,8 @@ function _buildStageMetrics(tasks, txMap) {
     e.totalToolErrors   += errs;
   }
   return Object.values(stageMap).sort((a, b) => {
-    if (a.stage === '(no stage)') return 1;
-    if (b.stage === '(no stage)') return -1;
+    if (a.stage === '(no phase)') return 1;
+    if (b.stage === '(no phase)') return -1;
     const na = Number(a.stage), nb = Number(b.stage);
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
     return a.stage.localeCompare(b.stage);
@@ -2638,27 +2638,54 @@ function _renderDotPlot(values, globalMax, color, plotW, plotH, fmtFn) {
   if (!values.length) {
     return `<svg width="${plotW}" height="${plotH}"><text x="4" y="${plotH/2+4}" fill="#d1d5db" font-size="10">no data</text></svg>`;
   }
-  const padL = 4, padR = 12;
+  const padL = 4, padR = 12, padT = 2, padB = 3;
   const w = plotW - padL - padR;
-  const cy = plotH * 0.6;
-  const r  = 4;
+  const h = plotH - padT - padB;
+  const NUM_BINS = 30;
   function vx(v) { return padL + (globalMax > 0 ? (v / globalMax) * w : 0); }
-  // Bucket by rounded pixel for jitter
-  const buckets = {};
-  let dots = '';
+
+  // Build histogram bins
+  const bins = new Array(NUM_BINS).fill(0);
+  const binLabels = new Array(NUM_BINS).fill(null); // store representative value for tooltip
   for (const v of values) {
-    const x = Math.round(vx(v));
-    buckets[x] = (buckets[x] || 0);
-    const jitter = buckets[x] * (r * 2.2);
-    const y = Math.max(r + 1, cy - jitter);
-    buckets[x]++;
-    dots += `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.72"><title>${fmtFn ? fmtFn(v) : v}</title></circle>`;
+    const bi = globalMax > 0 ? Math.min(NUM_BINS - 1, Math.floor((v / globalMax) * NUM_BINS)) : 0;
+    bins[bi]++;
+    if (binLabels[bi] === null) binLabels[bi] = v;
   }
-  const baseline = `<line x1="${padL}" y1="${cy + r + 2}" x2="${plotW - padR}" y2="${cy + r + 2}" stroke="#e5e7eb" stroke-width="1"/>`;
+  const maxBin = Math.max(1, ...bins);
+  const binW = w / NUM_BINS;
+
+  // Parse color to get RGB for blending (color is hex like #3b82f6)
+  function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    return [r,g,b];
+  }
+  function blendToWhite(hex, t) { // t=0 → white, t=1 → color
+    const [r,g,b] = hexToRgb(hex);
+    const ri = Math.round(255 + (r-255)*t), gi = Math.round(255 + (g-255)*t), bi = Math.round(255 + (b-255)*t);
+    return `rgb(${ri},${gi},${bi})`;
+  }
+
+  let bars = '';
+  for (let i = 0; i < NUM_BINS; i++) {
+    if (!bins[i]) continue;
+    const density = bins[i] / maxBin;            // 0..1
+    const barH = Math.max(1, density * h);
+    const x = padL + i * binW;
+    const y = padT + h - barH;
+    // Color intensity proportional to count: sparse bins = washed out, dense bins = full color
+    const fillColor = blendToWhite(color, 0.25 + 0.75 * density);
+    const binStart = (i / NUM_BINS) * globalMax;
+    const binEnd   = ((i + 1) / NUM_BINS) * globalMax;
+    const tip = fmtFn ? `${fmtFn(binStart)}–${fmtFn(binEnd)}: ${bins[i]}` : `${bins[i]}`;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1,binW-0.5).toFixed(1)}" height="${barH.toFixed(1)}" fill="${fillColor}" rx="1"><title>${tip}</title></rect>`;
+  }
+
+  const baseline = `<line x1="${padL}" y1="${padT + h}" x2="${plotW - padR}" y2="${padT + h}" stroke="#e5e7eb" stroke-width="1"/>`;
   const avg  = values.reduce((s, v) => s + v, 0) / values.length;
   const avgX = vx(avg);
-  const avgLine = `<line x1="${avgX}" y1="${cy - r - 2}" x2="${avgX}" y2="${cy + r + 2}" stroke="${color}" stroke-width="2.5" opacity="0.9"/>`;
-  return `<svg width="${plotW}" height="${plotH}">${baseline}${avgLine}${dots}</svg>`;
+  const avgLine = `<line x1="${avgX}" y1="${padT}" x2="${avgX}" y2="${padT + h}" stroke="${color}" stroke-width="2" stroke-dasharray="3,2" opacity="0.9"><title>avg: ${fmtFn ? fmtFn(avg) : avg}</title></line>`;
+  return `<svg width="${plotW}" height="${plotH}">${baseline}${bars}${avgLine}</svg>`;
 }
 
 function _renderMetricSection(stageData, metricKey, title, fmtFn) {
