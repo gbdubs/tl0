@@ -232,6 +232,9 @@ class Index:
             if created_by:
                 children.setdefault(created_by, []).append(task_id)
 
+        # Build transcript summaries from DB (no filesystem sync)
+        tx_summaries = self._build_transcript_summaries_from_db()
+
         tasks = []
         for row in rows:
             t = json.loads(row[0])
@@ -244,14 +247,13 @@ class Index:
             t["parent_task"] = t.get("created_by")
             t["source"] = t.get("created_by") or "human"
             t["tasks_created"] = children.get(t["id"], [])
+            t["transcript"] = tx_summaries.get(t["id"])
             tasks.append(t)
 
         return tasks
 
-    def get_all_transcript_summaries(self) -> dict:
-        """Return transcript summaries grouped by task_id."""
-        self.sync_transcripts()
-
+    def _build_transcript_summaries_from_db(self) -> dict:
+        """Build transcript summaries from DB without filesystem sync."""
         # Fetch all summaries
         rows = self._conn.execute(
             "SELECT task_id, filename, num_events, num_turns, duration_ms, "
@@ -310,7 +312,25 @@ class Index:
 
                 invocations.append(inv)
 
-            # Check for loop.log
+            result[task_id] = {
+                "has_transcript": True,
+                "invocations": invocations,
+                "total_cost_usd": total_cost,
+                "total_duration_ms": total_duration,
+                "merge_conflict_count": merge_conflict_count,
+                "total_tool_errors": total_tool_errors,
+            }
+
+        return result
+
+    def get_all_transcript_summaries(self) -> dict:
+        """Return transcript summaries grouped by task_id."""
+        self.sync_transcripts()
+
+        result = self._build_transcript_summaries_from_db()
+
+        # Add loop.log info (only needed for detailed transcript view)
+        for task_id, summary in result.items():
             loop_log = self._transcripts_folder / task_id / "loop.log"
             has_loop_log = loop_log.exists()
             loop_log_lines = 0
@@ -319,17 +339,8 @@ class Index:
                     loop_log_lines = len(loop_log.read_text().splitlines())
                 except OSError:
                     pass
-
-            result[task_id] = {
-                "has_transcript": True,
-                "has_loop_log": has_loop_log,
-                "loop_log_lines": loop_log_lines,
-                "invocations": invocations,
-                "total_cost_usd": total_cost,
-                "total_duration_ms": total_duration,
-                "merge_conflict_count": merge_conflict_count,
-                "total_tool_errors": total_tool_errors,
-            }
+            summary["has_loop_log"] = has_loop_log
+            summary["loop_log_lines"] = loop_log_lines
 
         return result
 
@@ -354,8 +365,20 @@ class Index:
                     continue
         self._conn.commit()
 
-        all_summaries = self.get_all_transcript_summaries()
-        return all_summaries.get(task_id, {"has_transcript": False})
+        result = self._build_transcript_summaries_from_db()
+        summary = result.get(task_id, {"has_transcript": False})
+        # Add loop.log info for single-task view
+        loop_log = self._transcripts_folder / task_id / "loop.log"
+        has_loop_log = loop_log.exists()
+        loop_log_lines = 0
+        if has_loop_log:
+            try:
+                loop_log_lines = len(loop_log.read_text().splitlines())
+            except OSError:
+                pass
+        summary["has_loop_log"] = has_loop_log
+        summary["loop_log_lines"] = loop_log_lines
+        return summary
 
     def find_ready(self, model: str | None = None, tags: list[str] | None = None) -> list[dict]:
         """Find tasks that are pending with all blockers done."""

@@ -1707,7 +1707,6 @@ function renderExecSection(tx, taskId) {
 
 async function refresh() {
   document.getElementById('stats').textContent = 'Refreshing…';
-  _allTranscripts = null; // invalidate transcript cache
   await loadTasks();
 }
 
@@ -2716,7 +2715,7 @@ function _stageColor(stageName, allStageNames) {
   return RC_PALETTE[idx >= 0 ? idx % RC_PALETTE.length : 0];
 }
 
-function _buildStageMetrics(tasks, txMap) {
+function _buildStageMetrics(tasks) {
   const stageMap = {};
   for (const task of tasks) {
     const stageTag = (task.tags || []).find(t => t.startsWith('phase:'));
@@ -2742,7 +2741,7 @@ function _buildStageMetrics(tasks, txMap) {
     else if (m.includes('haiku'))  e.modelCounts.haiku++;
     else e.modelCounts.other++;
     // Transcript metrics
-    const tx = txMap[task.id];
+    const tx = task.transcript;
     if (!tx) continue;
     e.txTasks.push(task);
     e.txTaskCount++;
@@ -3273,23 +3272,13 @@ async function renderReport() {
   const loadingEl = document.getElementById('report-loading');
   if (!contentEl) return;
 
-  if (!_allTranscripts) {
-    loadingEl.style.display = '';
-    contentEl.innerHTML = '';
-    try {
-      const res = await fetch('/api/all-transcripts');
-      _allTranscripts = await res.json();
-    } catch (_) { _allTranscripts = {}; }
-    loadingEl.style.display = 'none';
-  }
-
   const tasks = getFiltered();
 
   if (_rcSplitTs) {
     // ── Split mode ──
     const { before, after } = _splitTasksByTime(tasks, _rcSplitTs);
-    const beforeData = _buildStageMetrics(before, _allTranscripts);
-    const afterData  = _buildStageMetrics(after,  _allTranscripts);
+    const beforeData = _buildStageMetrics(before);
+    const afterData  = _buildStageMetrics(after);
 
     if (!beforeData.length && !afterData.length) {
       contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
@@ -3307,7 +3296,7 @@ async function renderReport() {
     contentEl.innerHTML = html;
   } else {
     // ── Normal mode ──
-    const stageData = _buildStageMetrics(tasks, _allTranscripts);
+    const stageData = _buildStageMetrics(tasks);
     if (!stageData.length) {
       contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
       return;
@@ -3325,7 +3314,6 @@ async function renderReport() {
 }
 
 // ── Table view ───────────────────────────────────────────────
-let _allTranscripts = null;
 let _tableSort = { col: null, dir: 'asc' };
 
 const TABLE_COLUMNS = [
@@ -3492,29 +3480,17 @@ function _statusBadgeStyle(status) {
 
 function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-async function renderTable() {
+function renderTable() {
   const tableEl = document.getElementById('task-table');
   const tbody = tableEl.querySelector('tbody');
   const thead = tableEl.querySelector('thead tr');
-
-  // Load transcript data if not cached
-  if (!_allTranscripts) {
-    tbody.innerHTML = `<tr><td colspan="99" id="table-loading">Loading transcript data…</td></tr>`;
-    thead.innerHTML = '';
-    try {
-      const res = await fetch('/api/all-transcripts');
-      _allTranscripts = await res.json();
-    } catch (_) {
-      _allTranscripts = {};
-    }
-  }
 
   const filtered = getFiltered();
   const visCols = TABLE_COLUMNS.filter(c => _visibleCols.has(c.key));
 
   // Build rows with sort values
   let rows = filtered.map(task => {
-    const ts = _allTranscripts[task.id] || null;
+    const ts = task.transcript || null;
     return { task, ts, _sortVals: {} };
   });
 
@@ -3562,7 +3538,7 @@ async function renderTable() {
     const col = TABLE_COLUMNS.find(c => c.key === colKey);
     const task = taskMap[taskId];
     if (!col || !task) return;
-    const ts = _allTranscripts ? (_allTranscripts[taskId] || null) : null;
+    const ts = task ? (task.transcript || null) : null;
     _showColFilterMenu(e, task, ts, col);
   };
 
