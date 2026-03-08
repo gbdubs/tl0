@@ -549,8 +549,10 @@ merge_and_push() {
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
       bump_meta_versions
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-      if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
+      local commit_stderr_1
+      if ! commit_stderr_1=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
         warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected. Merging main into task branch and retrying..."
+        warn "Commit stderr: $commit_stderr_1"
         git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
         git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
@@ -622,8 +624,10 @@ merge_and_push() {
 
     bump_meta_versions
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-    if ! git -C "$CODE_REPO" commit -m "$commit_msg" 2>/dev/null; then
+    local commit_stderr_2
+    if ! commit_stderr_2=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
       warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected. Retrying..."
+      warn "Commit stderr: $commit_stderr_2"
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
       sleep $((1 + RANDOM % 3))
@@ -901,6 +905,7 @@ if text_parts:
       warn "No commits on branch and no result file. Task may have failed."
       git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
       print_resume_instructions "$task_id" "$short_id" "$branch" "Claude produced no commits or result"
+      tl0m free 2>/dev/null || true
       TASK_TRANSCRIPT_DIR=""
       return 1
     fi
@@ -925,6 +930,7 @@ if text_parts:
     warn "Failed to merge main into task branch. Preserving work."
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge conflict with main"
+    tl0m free 2>/dev/null || true
     TASK_TRANSCRIPT_DIR=""
     return 1
   fi
@@ -967,6 +973,7 @@ if text_parts:
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge/push to main failed"
+    tl0m free 2>/dev/null || true
     TASK_TRANSCRIPT_DIR=""
     return 1
   fi
