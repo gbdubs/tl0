@@ -935,6 +935,69 @@ mark {
   height: 120px; color: var(--text-muted); font-size: 13px;
 }
 .rc-axis-hint { font-size: 10px; color: #d1d5db; padding-left: 92px; margin-top: 2px; margin-bottom: 10px; }
+
+/* ── Time-split controls ─────────────────────────────────────── */
+.rc-split-bar {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: white; border: 2px solid #3b82f6; border-radius: 8px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.rc-split-bar label { font-size: 12px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; }
+.rc-split-bar input[type="datetime-local"] {
+  font-size: 13px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: var(--text); font-family: inherit;
+}
+.rc-split-bar button {
+  font-size: 12px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: var(--text-muted); cursor: pointer; font-family: inherit;
+}
+.rc-split-bar button:hover { background: var(--border); }
+.rc-split-bar .rc-split-hint { font-size: 12px; color: var(--text-muted); }
+.rc-saved-splits { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; margin-top: 4px; }
+.rc-saved-splits .rc-saved-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+.rc-saved-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+  background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 12px;
+  font-size: 11px; color: #4338ca; cursor: pointer; white-space: nowrap;
+}
+.rc-saved-chip:hover { background: #e0e7ff; border-color: #a5b4fc; }
+.rc-saved-chip.active { background: #4338ca; color: white; border-color: #4338ca; }
+.rc-saved-chip .rc-chip-x {
+  font-size: 13px; line-height: 1; color: #818cf8; cursor: pointer; margin-left: 2px;
+}
+.rc-saved-chip .rc-chip-x:hover { color: #dc2626; }
+.rc-saved-chip.active .rc-chip-x { color: rgba(255,255,255,0.7); }
+.rc-saved-chip.active .rc-chip-x:hover { color: #fca5a5; }
+
+/* ── Before/After paired rows ────────────────────────────────── */
+.rc-split-group { margin-bottom: 14px; border-left: 3px solid var(--border); padding-left: 8px; }
+.rc-split-group-label {
+  font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 4px;
+}
+.rc-stage-row .rc-split-tag {
+  font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+}
+.rc-split-tag.before { background: #dbeafe; color: #1d4ed8; }
+.rc-split-tag.after  { background: #d1fae5; color: #059669; }
+
+.rc-split-summary {
+  display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.rc-split-summary-col {
+  flex: 1; min-width: 280px;
+}
+.rc-split-summary-col .rc-split-col-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+  margin-bottom: 8px; padding-bottom: 4px; border-bottom: 2px solid var(--border);
+}
+.rc-split-col-title.before { color: #1d4ed8; border-color: #3b82f6; }
+.rc-split-col-title.after  { color: #059669; border-color: #10b981; }
+
+.rc-delta { font-size: 11px; font-weight: 600; margin-left: 6px; }
+.rc-delta.better { color: #059669; }
+.rc-delta.worse  { color: #dc2626; }
+.rc-delta.neutral { color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -1019,6 +1082,13 @@ mark {
   </div>
 
   <div id="report-container">
+    <div class="rc-split-bar">
+      <label>Time split</label>
+      <input type="datetime-local" id="rc-split-dt" onchange="onRcSplitChange()" />
+      <button id="rc-split-clear-btn" onclick="clearRcSplit()" style="display:none">Clear</button>
+      <span class="rc-split-hint" id="rc-split-hint">Set a split point to compare before / after</span>
+      <div class="rc-saved-splits" id="rc-saved-splits"></div>
+    </div>
     <div id="report-loading" style="display:none;padding:24px;color:var(--text-muted)">Loading transcript data…</div>
     <div id="report-content"></div>
   </div>
@@ -2908,6 +2978,301 @@ function _renderSummaryCards(stageData) {
   </div>`;
 }
 
+// ── Time-split helpers ──────────────────────────────────────
+let _rcSplitTs = null; // epoch ms or null
+
+function _taskTimestamp(task) {
+  const ts = task.completed_at || task.created_at;
+  return ts ? new Date(ts).getTime() : null;
+}
+
+// Saved split points in localStorage
+function _getSavedSplits() {
+  try { return JSON.parse(localStorage.getItem('tl0_rc_saved_splits') || '[]'); } catch(_) { return []; }
+}
+function _setSavedSplits(arr) {
+  try { localStorage.setItem('tl0_rc_saved_splits', JSON.stringify(arr)); } catch(_) {}
+}
+function _addSavedSplit(val) {
+  const splits = _getSavedSplits();
+  if (!splits.includes(val)) {
+    splits.push(val);
+    splits.sort();
+    _setSavedSplits(splits);
+  }
+}
+function _removeSavedSplit(val) {
+  _setSavedSplits(_getSavedSplits().filter(v => v !== val));
+}
+
+function _fmtSplitChipLabel(val) {
+  const d = new Date(val);
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dy = String(d.getDate()).padStart(2, '0');
+  const hr = String(d.getHours()).padStart(2, '0');
+  const mn = String(d.getMinutes()).padStart(2, '0');
+  return `${mo}/${dy} ${hr}:${mn}`;
+}
+
+function _renderSavedSplitChips() {
+  const container = document.getElementById('rc-saved-splits');
+  if (!container) return;
+  const splits = _getSavedSplits();
+  if (!splits.length) { container.innerHTML = ''; return; }
+  const currentVal = document.getElementById('rc-split-dt').value;
+  let html = '<span class="rc-saved-label">Saved:</span>';
+  for (const val of splits) {
+    const isActive = val === currentVal;
+    html += `<span class="rc-saved-chip${isActive ? ' active' : ''}" onclick="applySavedSplit('${val}')" title="${val}">`;
+    html += _fmtSplitChipLabel(val);
+    html += `<span class="rc-chip-x" onclick="event.stopPropagation(); deleteSavedSplit('${val}')">&times;</span>`;
+    html += `</span>`;
+  }
+  container.innerHTML = html;
+}
+
+function applySavedSplit(val) {
+  const el = document.getElementById('rc-split-dt');
+  el.value = val;
+  onRcSplitChange();
+}
+
+function deleteSavedSplit(val) {
+  _removeSavedSplit(val);
+  _renderSavedSplitChips();
+}
+
+function _applySplitUI(val) {
+  _rcSplitTs = new Date(val).getTime();
+  document.getElementById('rc-split-dt').value = val;
+  document.getElementById('rc-split-clear-btn').style.display = '';
+  document.getElementById('rc-split-hint').textContent = '';
+  _renderSavedSplitChips();
+}
+
+function onRcSplitChange() {
+  const el = document.getElementById('rc-split-dt');
+  const val = el.value;
+  if (val) {
+    _rcSplitTs = new Date(val).getTime();
+    document.getElementById('rc-split-clear-btn').style.display = '';
+    document.getElementById('rc-split-hint').textContent = '';
+    _addSavedSplit(val);
+  } else {
+    clearRcSplit();
+    return;
+  }
+  try { localStorage.setItem('tl0_rc_split', val || ''); } catch(_) {}
+  _renderSavedSplitChips();
+  renderReport();
+}
+function clearRcSplit() {
+  _rcSplitTs = null;
+  document.getElementById('rc-split-dt').value = '';
+  document.getElementById('rc-split-clear-btn').style.display = 'none';
+  document.getElementById('rc-split-hint').textContent = 'Set a split point to compare before / after';
+  try { localStorage.setItem('tl0_rc_split', ''); } catch(_) {}
+  _renderSavedSplitChips();
+  renderReport();
+}
+// Restore saved split on load
+try {
+  const saved = localStorage.getItem('tl0_rc_split');
+  requestAnimationFrame(() => {
+    if (saved) { _applySplitUI(saved); }
+    _renderSavedSplitChips();
+  });
+} catch(_) {}
+
+function _splitTasksByTime(tasks, splitTs) {
+  const before = [], after = [];
+  for (const t of tasks) {
+    const ts = _taskTimestamp(t);
+    if (ts === null || ts < splitTs) before.push(t);
+    else after.push(t);
+  }
+  return { before, after };
+}
+
+function _rcDelta(valBefore, valAfter, fmtFn, lowerIsBetter) {
+  if (!valBefore || !valAfter) return '';
+  const diff = valAfter - valBefore;
+  const pct = valBefore !== 0 ? Math.round((diff / valBefore) * 100) : 0;
+  if (pct === 0) return `<span class="rc-delta neutral">0%</span>`;
+  const sign = pct > 0 ? '+' : '';
+  const cls = (lowerIsBetter ? pct < 0 : pct > 0) ? 'better' : 'worse';
+  return `<span class="rc-delta ${cls}">${sign}${pct}%</span>`;
+}
+
+function _renderSplitSummaryCards(beforeData, afterData) {
+  function _totals(data) {
+    return {
+      cost: data.reduce((s, e) => s + e.totalCost, 0),
+      dur:  data.reduce((s, e) => s + e.totalDuration_ms, 0),
+      turns: data.reduce((s, e) => s + e.totalTurns, 0),
+      errs: data.reduce((s, e) => s + e.totalToolErrors, 0),
+      tasks: data.reduce((s, e) => s + e.taskCount, 0),
+      tx:   data.reduce((s, e) => s + e.txTaskCount, 0),
+    };
+  }
+  const b = _totals(beforeData), a = _totals(afterData);
+  const bAvgCost = b.tx ? b.cost / b.tx : 0, aAvgCost = a.tx ? a.cost / a.tx : 0;
+  const bAvgDur  = b.tx ? b.dur / b.tx : 0,  aAvgDur  = a.tx ? a.dur / a.tx : 0;
+  const bAvgTurns = b.tx ? b.turns / b.tx : 0, aAvgTurns = a.tx ? a.turns / a.tx : 0;
+
+  function card(label, bVal, aVal, fmtFn, lowerIsBetter) {
+    return `<div class="rc-stat-card">
+      <label>${label}</label>
+      <value>${fmtFn(aVal)}${_rcDelta(bVal, aVal, fmtFn, lowerIsBetter)}</value>
+      <small>was ${fmtFn(bVal)}</small>
+    </div>`;
+  }
+
+  return `<div class="rc-stat-cards" style="margin-bottom:28px">
+    <div class="rc-stat-card"><label>Before</label><value>${b.tasks}</value><small>${b.tx} with transcript</small></div>
+    <div class="rc-stat-card"><label>After</label><value>${a.tasks}</value><small>${a.tx} with transcript</small></div>
+    ${card('Avg Cost', bAvgCost, aAvgCost, _rcFmtCost, true)}
+    ${card('Avg Duration', bAvgDur, aAvgDur, _rcFmtMs, true)}
+    ${card('Avg Turns', bAvgTurns, aAvgTurns, _rcFmtTurns, true)}
+    ${card('Tool Errors', b.errs, a.errs, _rcFmtN, true)}
+  </div>`;
+}
+
+const RC_BEFORE_COLOR = '#3b82f6';
+const RC_AFTER_COLOR  = '#10b981';
+
+function _renderSplitMetricSection(beforeData, afterData, metricKey, title, fmtFn) {
+  const PLOT_W = 340, PLOT_H = 32;
+  const allValsB = beforeData.flatMap(e => e[metricKey]);
+  const allValsA = afterData.flatMap(e => e[metricKey]);
+  const globalMax = Math.max(1, ...allValsB, ...allValsA);
+  const totalB = allValsB.reduce((s, v) => s + v, 0);
+  const totalA = allValsA.reduce((s, v) => s + v, 0);
+  const avgB = allValsB.length ? totalB / allValsB.length : 0;
+  const avgA = allValsA.length ? totalA / allValsA.length : 0;
+
+  let html = `<div class="rc-section"><div class="rc-section-title">${title}</div>`;
+  html += `<div class="rc-stat-cards">
+    <div class="rc-stat-card"><label>Before avg</label><value>${allValsB.length ? fmtFn(avgB) : '—'}</value><small>n=${allValsB.length}</small></div>
+    <div class="rc-stat-card"><label>After avg</label><value>${allValsA.length ? fmtFn(avgA) : '—'}${_rcDelta(avgB, avgA, fmtFn, true)}</value><small>n=${allValsA.length}</small></div>
+    <div class="rc-stat-card"><label>Before total</label><value>${fmtFn(totalB)}</value></div>
+    <div class="rc-stat-card"><label>After total</label><value>${fmtFn(totalA)}${_rcDelta(totalB, totalA, fmtFn, true)}</value></div>
+  </div>`;
+
+  // Collect all stage names across both sets
+  const stageSet = new Set();
+  beforeData.forEach(e => stageSet.add(e.stage));
+  afterData.forEach(e => stageSet.add(e.stage));
+  const stageNames = [...stageSet].sort((a, b) => {
+    if (a === '(no phase)') return 1;
+    if (b === '(no phase)') return -1;
+    const na = Number(a), nb = Number(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+
+  for (const stage of stageNames) {
+    const bEntry = beforeData.find(e => e.stage === stage);
+    const aEntry = afterData.find(e => e.stage === stage);
+    const bVals = bEntry ? bEntry[metricKey] : [];
+    const aVals = aEntry ? aEntry[metricKey] : [];
+    const bAvg = bVals.length ? fmtFn(bVals.reduce((a, b) => a + b, 0) / bVals.length) : '—';
+    const aAvg = aVals.length ? fmtFn(aVals.reduce((a, b) => a + b, 0) / aVals.length) : '—';
+    html += `<div class="rc-split-group">
+      <div class="rc-split-group-label">${esc(stage)}</div>
+      <div class="rc-stage-row">
+        <div class="rc-stage-label"><span class="rc-split-tag before">before</span></div>
+        <div class="rc-stage-chart">${_renderDotPlot(bVals, globalMax, RC_BEFORE_COLOR, PLOT_W, PLOT_H, fmtFn)}</div>
+        <div class="rc-stage-ann">avg ${bAvg} · n=${bVals.length}</div>
+      </div>
+      <div class="rc-stage-row">
+        <div class="rc-stage-label"><span class="rc-split-tag after">after</span></div>
+        <div class="rc-stage-chart">${_renderDotPlot(aVals, globalMax, RC_AFTER_COLOR, PLOT_W, PLOT_H, fmtFn)}</div>
+        <div class="rc-stage-ann">avg ${aAvg} · n=${aVals.length}</div>
+      </div>
+    </div>`;
+  }
+  html += `<div class="rc-axis-hint">← 0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${fmtFn(globalMax)} max →</div>`;
+  html += `</div>`;
+  return html;
+}
+
+function _renderSplitToolSection(beforeData, afterData) {
+  const allTools = new Set();
+  beforeData.forEach(e => Object.keys(e.toolBreakdown).forEach(t => allTools.add(t)));
+  afterData.forEach(e => Object.keys(e.toolBreakdown).forEach(t => allTools.add(t)));
+  const toolList = [...allTools].sort();
+  if (!toolList.length) return '';
+
+  const stageSet = new Set();
+  beforeData.forEach(e => stageSet.add(e.stage));
+  afterData.forEach(e => stageSet.add(e.stage));
+  const stageNames = [...stageSet];
+
+  let html = `<div class="rc-section"><div class="rc-section-title">Tool Calls by Tool</div><div class="rc-tool-grid">`;
+  for (const tool of toolList) {
+    const bTotal = beforeData.reduce((s, e) => s + (e.toolBreakdown[tool] || 0), 0);
+    const aTotal = afterData.reduce((s, e) => s + (e.toolBreakdown[tool] || 0), 0);
+    const labels = ['Before', 'After'];
+    const vals   = [bTotal, aTotal];
+    const colors = [RC_BEFORE_COLOR, RC_AFTER_COLOR];
+    html += `<div class="rc-tool-card">
+      <div class="rc-tool-card-title">${esc(tool)} <span style="font-weight:400;color:#9ca3af">${aTotal} after · ${bTotal} before</span></div>
+      ${_renderGroupedBar(vals, labels, colors)}
+    </div>`;
+  }
+  html += `</div></div>`;
+  return html;
+}
+
+function _renderSplitModelSection(beforeData, afterData) {
+  const MODEL_COLORS = { opus: '#6d28d9', sonnet: '#1d4ed8', haiku: '#0e7490', other: '#6b7280' };
+  const MODEL_ORDER  = ['opus', 'sonnet', 'haiku', 'other'];
+  const BAR_W = 300, BAR_H = 14;
+  let html = `<div class="rc-section"><div class="rc-section-title">Model Distribution</div>`;
+
+  function renderRow(label, tagClass, data) {
+    for (const e of data) {
+      const total = e.taskCount || 1;
+      let bars = '', xOff = 0;
+      for (const m of MODEL_ORDER) {
+        const n = e.modelCounts[m] || 0;
+        if (!n) continue;
+        const w = Math.max(1, Math.round((n / total) * BAR_W));
+        bars += `<rect x="${xOff}" y="0" width="${w}" height="${BAR_H}" fill="${MODEL_COLORS[m]}" rx="2"><title>${m}: ${n}</title></rect>`;
+        xOff += w;
+      }
+      const counts = MODEL_ORDER.filter(m => e.modelCounts[m])
+        .map(m => `<span style="color:${MODEL_COLORS[m]};font-weight:600">${m}</span> ${e.modelCounts[m]}`).join(' · ');
+      html += `<div class="rc-stage-row">
+        <div class="rc-stage-label"><span class="rc-split-tag ${tagClass}">${label}</span></div>
+        <div class="rc-stage-chart"><svg width="${BAR_W}" height="${BAR_H}" style="border-radius:3px;overflow:hidden">${bars}</svg></div>
+        <div class="rc-stage-ann" style="font-size:11px">${counts || '<span style="color:#d1d5db">none</span>'}</div>
+      </div>`;
+    }
+  }
+
+  const stageSet = new Set();
+  beforeData.forEach(e => stageSet.add(e.stage));
+  afterData.forEach(e => stageSet.add(e.stage));
+
+  for (const stage of stageSet) {
+    const bEntries = beforeData.filter(e => e.stage === stage);
+    const aEntries = afterData.filter(e => e.stage === stage);
+    html += `<div class="rc-split-group"><div class="rc-split-group-label">${esc(stage)}</div>`;
+    renderRow('before', 'before', bEntries);
+    renderRow('after', 'after', aEntries);
+    html += `</div>`;
+  }
+
+  const legend = MODEL_ORDER.map(m =>
+    `<span><span style="display:inline-block;width:10px;height:10px;background:${MODEL_COLORS[m]};border-radius:2px;margin-right:4px;vertical-align:middle"></span>${m}</span>`
+  ).join('');
+  html += `<div style="display:flex;gap:14px;padding-top:8px;padding-left:92px;font-size:11px;color:var(--text-muted)">${legend}</div>`;
+  html += `</div>`;
+  return html;
+}
+
 async function renderReport() {
   if (state.view !== 'report') return;
   const contentEl = document.getElementById('report-content');
@@ -2924,24 +3289,45 @@ async function renderReport() {
     loadingEl.style.display = 'none';
   }
 
-  const tasks     = getFiltered();
-  const stageData = _buildStageMetrics(tasks, _allTranscripts);
+  const tasks = getFiltered();
 
-  if (!stageData.length) {
-    contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
-    return;
+  if (_rcSplitTs) {
+    // ── Split mode ──
+    const { before, after } = _splitTasksByTime(tasks, _rcSplitTs);
+    const beforeData = _buildStageMetrics(before, _allTranscripts);
+    const afterData  = _buildStageMetrics(after,  _allTranscripts);
+
+    if (!beforeData.length && !afterData.length) {
+      contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
+      return;
+    }
+
+    let html = _renderSplitSummaryCards(beforeData, afterData);
+    html += _renderSplitMetricSection(beforeData, afterData, 'durations_ms', 'Latency', _rcFmtMs);
+    html += _renderSplitMetricSection(beforeData, afterData, 'turns',        'Turns',   _rcFmtTurns);
+    html += _renderSplitMetricSection(beforeData, afterData, 'costs_usd',    'Cost (USD)', _rcFmtCost);
+    html += _renderSplitMetricSection(beforeData, afterData, 'toolErrors',   'Tool Errors', _rcFmtN);
+    html += _renderSplitMetricSection(beforeData, afterData, 'toolCalls',    'Total Tool Calls', _rcFmtN);
+    html += _renderSplitToolSection(beforeData, afterData);
+    html += _renderSplitModelSection(beforeData, afterData);
+    contentEl.innerHTML = html;
+  } else {
+    // ── Normal mode ──
+    const stageData = _buildStageMetrics(tasks, _allTranscripts);
+    if (!stageData.length) {
+      contentEl.innerHTML = '<div class="rc-no-data">No tasks match current filters.</div>';
+      return;
+    }
+    let html = _renderSummaryCards(stageData);
+    html += _renderMetricSection(stageData, 'durations_ms', 'Latency', _rcFmtMs);
+    html += _renderMetricSection(stageData, 'turns',        'Turns',   _rcFmtTurns);
+    html += _renderMetricSection(stageData, 'costs_usd',    'Cost (USD)', _rcFmtCost);
+    html += _renderMetricSection(stageData, 'toolErrors',   'Tool Errors', _rcFmtN);
+    html += _renderMetricSection(stageData, 'toolCalls',    'Total Tool Calls', _rcFmtN);
+    html += _renderToolSection(stageData);
+    html += _renderModelSection(stageData);
+    contentEl.innerHTML = html;
   }
-
-  let html = _renderSummaryCards(stageData);
-  html += _renderMetricSection(stageData, 'durations_ms', 'Latency', _rcFmtMs);
-  html += _renderMetricSection(stageData, 'turns',        'Turns',   _rcFmtTurns);
-  html += _renderMetricSection(stageData, 'costs_usd',    'Cost (USD)', _rcFmtCost);
-  html += _renderMetricSection(stageData, 'toolErrors',   'Tool Errors', _rcFmtN);
-  html += _renderMetricSection(stageData, 'toolCalls',    'Total Tool Calls', _rcFmtN);
-  html += _renderToolSection(stageData);
-  html += _renderModelSection(stageData);
-
-  contentEl.innerHTML = html;
 }
 
 // ── Table view ───────────────────────────────────────────────
@@ -3868,94 +4254,6 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                 })
 
     return timeline
-
-
-def _build_transcript_summary(task_id: str) -> dict:
-    """Build a JSON-serialisable summary of transcript data for a task."""
-    transcript_dir = TRANSCRIPTS_FOLDER / task_id
-    if not transcript_dir.is_dir():
-        return {"has_transcript": False}
-
-    loop_log = transcript_dir / "loop.log"
-    jsonl_files = sorted(transcript_dir.glob("*.jsonl"))
-
-    invocations = []
-    total_cost = 0.0
-    total_duration = 0
-
-    for jf in jsonl_files:
-        events = []
-        for line in jf.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-        inv: dict = {"file": jf.name, "num_events": len(events)}
-
-        # Count tool usage from assistant events; count tool errors from user events
-        tool_counts: dict[str, int] = {}
-        tool_error_count = 0
-        for e in events:
-            if e.get("type") == "assistant" and isinstance(e.get("message", {}).get("content"), list):
-                for block in e["message"]["content"]:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        name = block.get("name", "unknown")
-                        tool_counts[name] = tool_counts.get(name, 0) + 1
-            elif e.get("type") == "user" and isinstance(e.get("message", {}).get("content"), list):
-                for block in e["message"]["content"]:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
-                        if block.get("is_error"):
-                            tool_error_count += 1
-        if tool_counts:
-            inv["tool_usage"] = tool_counts
-        inv["tool_errors"] = tool_error_count
-
-        # Extract result event data
-        for e in reversed(events):
-            if e.get("type") == "result":
-                inv["num_turns"] = e.get("num_turns", 0)
-                inv["duration_ms"] = e.get("duration_ms", 0)
-                inv["cost_usd"] = e.get("total_cost_usd", 0)
-                total_cost += inv["cost_usd"]
-                total_duration += inv["duration_ms"]
-                # Model from modelUsage
-                mu = e.get("modelUsage", {})
-                if mu:
-                    inv["model"] = next(iter(mu), None)
-                # Result preview
-                result = e.get("result", "")
-                if isinstance(result, list):
-                    result = " ".join(
-                        b.get("text", "") for b in result
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                if result:
-                    inv["result_preview"] = result[:200]
-                break
-
-        invocations.append(inv)
-
-    # Count merge-conflict resolution attempts (files named *-merge-conflict.jsonl)
-    merge_conflict_count = sum(
-        1 for jf in jsonl_files if "merge-conflict" in jf.name
-    )
-
-    total_tool_errors = sum(inv.get("tool_errors", 0) for inv in invocations)
-
-    return {
-        "has_transcript": True,
-        "has_loop_log": loop_log.exists(),
-        "loop_log_lines": len(loop_log.read_text().splitlines()) if loop_log.exists() else 0,
-        "invocations": invocations,
-        "total_cost_usd": total_cost,
-        "total_duration_ms": total_duration,
-        "merge_conflict_count": merge_conflict_count,
-        "total_tool_errors": total_tool_errors,
-    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
