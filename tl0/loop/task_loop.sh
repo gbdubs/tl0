@@ -763,8 +763,18 @@ run_task() {
     rm -f "/tmp/tl0-wt-fail-${short_id}"
 
     # --- Run claude ---
+    # Export worktree path so the agent can self-check its working directory.
+    export TL0_WORKTREE_ROOT="$worktree"
+    export TL0_MAIN_REPO="$CODE_REPO"
+
     local prompt
-    prompt="$(cat "$TASK_PROMPT")
+    prompt="IMPORTANT — WORKTREE PATH CHECK
+You are running in a git worktree. Your working directory is:
+  $worktree
+The main repository at $CODE_REPO is OFF LIMITS — other agents may be modifying it concurrently.
+All file paths MUST be relative (e.g. cases/my-case/generate.py). NEVER use absolute paths to $CODE_REPO.
+
+$(cat "$TASK_PROMPT")
 
 TL0_TASK_ID=$task_id
 AGENT_ID=$AGENT_ID
