@@ -1358,7 +1358,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace("fetch('/api/all-transcripts')", "fetch('/viewer/api/all-transcripts')") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
                 .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
-                .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'")
+                .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'") \
+                .replace("fetch(`/api/transcript-raw/", "fetch(`/viewer/api/transcript-raw/")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
@@ -1406,6 +1407,28 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 task_id = parts[4]
                 filename = parts[5]
                 self._respond_json(_build_transcript_messages(task_id, filename))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        elif path.startswith('/viewer/api/transcript-raw/'):
+            parts = path.split('/')
+            # /viewer/api/transcript-raw/<task_id>/<filename>
+            if len(parts) >= 6:
+                task_id = parts[4]
+                filename = parts[5]
+                filepath = TRANSCRIPTS_FOLDER / task_id / filename
+                events = []
+                if filepath.exists():
+                    for line in filepath.read_text().splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            events.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            events.append({"type": "parse_error", "raw": line[:500]})
+                self._respond_json(events)
             else:
                 self.send_response(404)
                 self.end_headers()
