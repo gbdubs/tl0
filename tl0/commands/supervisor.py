@@ -1347,10 +1347,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace('{{GITHUB_REPO_URL}}', self.github_repo_url) \
                 .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
-                .replace("fetch('/api/transcripts/'", "fetch('/viewer/api/transcripts/'") \
                 .replace("fetch('/api/transcript-messages/'", "fetch('/viewer/api/transcript-messages/'") \
                 .replace("fetch(`/api/transcript-messages/", "fetch(`/viewer/api/transcript-messages/") \
-                .replace("fetch('/api/all-transcripts')", "fetch('/viewer/api/all-transcripts')") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
                 .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
                 .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'") \
@@ -1425,15 +1423,6 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
-
-        elif path.startswith('/viewer/api/transcripts/'):
-            task_id = path.split('/')[-1]
-            from tl0.common import _get_index
-            self._respond_json(_get_index().get_transcript_summary(task_id))
-
-        elif path == '/viewer/api/all-transcripts':
-            from tl0.common import _get_index
-            self._respond_json(_get_index().get_all_transcript_summaries())
 
         elif path.startswith('/viewer/api/loop-log/'):
             task_id = path.split('/')[-1]

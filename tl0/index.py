@@ -7,12 +7,16 @@ Delete TASKS_DIR/.cache/index.db and it rebuilds automatically on next access.
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 from tl0.common import (
     task_status, task_claimed_by, task_last_claimed_at,
     task_completed_at, task_created_at, task_updated_at,
 )
+
+# Minimum seconds between automatic full syncs on the read path.
+_SYNC_THROTTLE_SECS = 60
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -89,6 +93,11 @@ class Index:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._last_task_sync: float = 0.0
+        self._last_transcript_sync: float = 0.0
+        # Initial sync so the DB is warm on first query.
+        self.sync_tasks()
+        self.sync_transcripts()
 
     # ------------------------------------------------------------------
     # Sync: mtime-based incremental refresh
@@ -100,11 +109,15 @@ class Index:
         self._conn.execute("DELETE FROM transcript_summaries")
         self._conn.execute("DELETE FROM tool_usage")
         self._conn.commit()
-        self.sync_tasks()
-        self.sync_transcripts()
+        self.sync_tasks(force=True)
+        self.sync_transcripts(force=True)
 
-    def sync_tasks(self):
+    def sync_tasks(self, *, force: bool = False):
         """Sync tasks table with JSON files on disk (mtime-based)."""
+        if not force:
+            now = time.monotonic()
+            if now - self._last_task_sync < _SYNC_THROTTLE_SECS:
+                return
         if not self._tasks_folder.exists():
             return
 
@@ -138,9 +151,14 @@ class Index:
             )
 
         self._conn.commit()
+        self._last_task_sync = time.monotonic()
 
-    def sync_transcripts(self):
+    def sync_transcripts(self, *, force: bool = False):
         """Sync transcript_summaries with JSONL files on disk."""
+        if not force:
+            now = time.monotonic()
+            if now - self._last_transcript_sync < _SYNC_THROTTLE_SECS:
+                return
         if not self._transcripts_folder.exists():
             return
 
@@ -179,6 +197,7 @@ class Index:
                 )
 
         self._conn.commit()
+        self._last_transcript_sync = time.monotonic()
 
     # ------------------------------------------------------------------
     # Notify: fast single-item updates (called from write path)
@@ -217,8 +236,13 @@ class Index:
     # ------------------------------------------------------------------
 
     def get_all_tasks(self) -> list[dict]:
-        """Return all tasks with derived fields, syncing from disk first."""
-        self.sync_tasks()
+        """Return all tasks with transcript summaries from the index.
+
+        Relies on notify_task_changed() / notify_transcript_written() for
+        incremental freshness, with a throttled full sync as safety net.
+        """
+        self.sync_tasks()          # throttled — no-op unless stale
+        self.sync_transcripts()    # throttled — no-op unless stale
         rows = self._conn.execute(
             "SELECT task_json, status, claimed_by, claimed_at, completed_at, "
             "created_at, updated_at, created_by, id FROM tasks"
@@ -252,18 +276,29 @@ class Index:
 
         return tasks
 
-    def _build_transcript_summaries_from_db(self) -> dict:
-        """Build transcript summaries from DB without filesystem sync."""
-        # Fetch all summaries
-        rows = self._conn.execute(
-            "SELECT task_id, filename, num_events, num_turns, duration_ms, "
-            "cost_usd, model, tool_errors, result_preview FROM transcript_summaries"
-        ).fetchall()
+    def _build_transcript_summaries_from_db(self, task_id: str | None = None) -> dict:
+        """Build transcript summaries from DB without filesystem sync.
 
-        # Fetch all tool usage
-        tool_rows = self._conn.execute(
-            "SELECT task_id, filename, tool_name, count FROM tool_usage"
-        ).fetchall()
+        If *task_id* is given, only that task's data is queried (much faster).
+        """
+        if task_id is not None:
+            rows = self._conn.execute(
+                "SELECT task_id, filename, num_events, num_turns, duration_ms, "
+                "cost_usd, model, tool_errors, result_preview FROM transcript_summaries "
+                "WHERE task_id = ?", (task_id,)
+            ).fetchall()
+            tool_rows = self._conn.execute(
+                "SELECT task_id, filename, tool_name, count FROM tool_usage "
+                "WHERE task_id = ?", (task_id,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT task_id, filename, num_events, num_turns, duration_ms, "
+                "cost_usd, model, tool_errors, result_preview FROM transcript_summaries"
+            ).fetchall()
+            tool_rows = self._conn.execute(
+                "SELECT task_id, filename, tool_name, count FROM tool_usage"
+            ).fetchall()
 
         # Build tool usage map: (task_id, filename) -> {tool: count}
         tool_map: dict[tuple[str, str], dict[str, int]] = {}
@@ -324,8 +359,12 @@ class Index:
         return result
 
     def get_all_transcript_summaries(self) -> dict:
-        """Return transcript summaries grouped by task_id."""
-        self.sync_transcripts()
+        """Return transcript summaries grouped by task_id.
+
+        Uses throttled sync — relies on notify_transcript_written() for
+        incremental freshness.
+        """
+        self.sync_transcripts()  # throttled
 
         result = self._build_transcript_summaries_from_db()
 
@@ -345,28 +384,14 @@ class Index:
         return result
 
     def get_transcript_summary(self, task_id: str) -> dict:
-        """Return transcript summary for a single task."""
-        # Sync just this task's transcripts
-        task_dir = self._transcripts_folder / task_id
-        if not task_dir.is_dir():
-            return {"has_transcript": False}
+        """Return transcript summary for a single task from the index DB.
 
-        # Check for stale entries
-        for jf in task_dir.glob("*.jsonl"):
-            mtime = os.path.getmtime(jf)
-            stored = self._conn.execute(
-                "SELECT file_mtime FROM transcript_summaries WHERE task_id = ? AND filename = ?",
-                (task_id, jf.name),
-            ).fetchone()
-            if stored is None or stored[0] != mtime:
-                try:
-                    self._upsert_transcript(task_id, jf, mtime)
-                except OSError:
-                    continue
-        self._conn.commit()
-
-        result = self._build_transcript_summaries_from_db()
-        summary = result.get(task_id, {"has_transcript": False})
+        No filesystem sync — relies on notify_transcript_written() for
+        freshness, with throttled full sync as safety net.
+        """
+        summary = self._build_transcript_summaries_from_db(task_id=task_id).get(
+            task_id, {"has_transcript": False}
+        )
         # Add loop.log info for single-task view
         loop_log = self._transcripts_folder / task_id / "loop.log"
         has_loop_log = loop_log.exists()
@@ -382,7 +407,7 @@ class Index:
 
     def find_ready(self, model: str | None = None, tags: list[str] | None = None) -> list[dict]:
         """Find tasks that are pending with all blockers done."""
-        self.sync_tasks()
+        self.sync_tasks()  # throttled
 
         # Get all pending tasks
         rows = self._conn.execute(
