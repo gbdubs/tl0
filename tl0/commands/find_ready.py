@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import random
 
 
 def main(argv: list[str] | None = None):
@@ -15,6 +16,10 @@ def main(argv: list[str] | None = None):
     ready = _get_index().find_ready(model=args.model, tags=args.tag or None)
 
     if args.limit > 0:
+        # Shuffle before limiting so concurrent workers don't all pick the
+        # same task.  This reduces contention on the claim lock dramatically
+        # when many workers poll at the same time.
+        random.shuffle(ready)
         ready = ready[:args.limit]
 
     print(json.dumps(ready, indent=2))
