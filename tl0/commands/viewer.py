@@ -2478,37 +2478,64 @@ const STATUS_COLORS = {
 };
 const STATUS_ORDER = ['done', 'in-progress', 'claimed', 'pending', 'stuck'];
 
-function inferStatusAt(task, t) {
-  if (t < new Date(task.created_at).getTime()) return null;
-  if (task.completed_at && t >= new Date(task.completed_at).getTime()) return 'done';
-  if (task.claimed_at && t >= new Date(task.claimed_at).getTime()) {
-    // Use current status for claimed/in-progress/stuck distinction
-    if (task.status === 'stuck') return 'stuck';
-    if (task.status === 'in-progress' || task.status === 'done') return 'in-progress';
-    return 'claimed';
-  }
-  return 'pending';
-}
-
 function buildTimeline(tasks) {
-  // Collect all event timestamps
-  const times = new Set();
-  tasks.forEach(t => {
-    if (t.created_at)   times.add(new Date(t.created_at).getTime());
-    if (t.claimed_at)   times.add(new Date(t.claimed_at).getTime());
-    if (t.completed_at) times.add(new Date(t.completed_at).getTime());
-  });
-  const sorted = [...times].filter(t => !isNaN(t)).sort((a, b) => a - b);
-  if (sorted.length === 0) return [];
+  // Event-sweep approach: O(N log N) instead of O(N * M)
+  // Record +1/-1 deltas at each status transition, then sweep to accumulate.
+  const events = []; // { time, status, delta }
+  tasks.forEach(task => {
+    const created = task.created_at ? new Date(task.created_at).getTime() : NaN;
+    const claimed = task.claimed_at ? new Date(task.claimed_at).getTime() : NaN;
+    const completed = task.completed_at ? new Date(task.completed_at).getTime() : NaN;
+    if (isNaN(created)) return;
 
-  return sorted.map(t => {
-    const counts = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
-    tasks.forEach(task => {
-      const s = inferStatusAt(task, t);
-      if (s) counts[s]++;
-    });
-    return { time: t, ...counts };
+    // Determine the "claimed" display status based on current task status
+    let claimedStatus = 'claimed';
+    if (task.status === 'stuck') claimedStatus = 'stuck';
+    else if (task.status === 'in-progress' || task.status === 'done') claimedStatus = 'in-progress';
+
+    if (!isNaN(completed)) {
+      // Task went: pending -> claimedStatus -> done
+      if (!isNaN(claimed)) {
+        events.push({ time: created, status: 'pending', delta: 1 });
+        events.push({ time: claimed, status: 'pending', delta: -1 });
+        events.push({ time: claimed, status: claimedStatus, delta: 1 });
+        events.push({ time: completed, status: claimedStatus, delta: -1 });
+        events.push({ time: completed, status: 'done', delta: 1 });
+      } else {
+        events.push({ time: created, status: 'pending', delta: 1 });
+        events.push({ time: completed, status: 'pending', delta: -1 });
+        events.push({ time: completed, status: 'done', delta: 1 });
+      }
+    } else if (!isNaN(claimed)) {
+      // Task went: pending -> claimedStatus (still active)
+      events.push({ time: created, status: 'pending', delta: 1 });
+      events.push({ time: claimed, status: 'pending', delta: -1 });
+      events.push({ time: claimed, status: claimedStatus, delta: 1 });
+    } else {
+      // Task is still pending
+      events.push({ time: created, status: 'pending', delta: 1 });
+    }
   });
+
+  if (events.length === 0) return [];
+
+  // Sort by time, with -1 deltas before +1 at the same time so transitions are clean
+  events.sort((a, b) => a.time - b.time || a.delta - b.delta);
+
+  // Sweep: accumulate counts, emit a timeline point at each unique timestamp
+  const counts = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
+  const timeline = [];
+  let i = 0;
+  while (i < events.length) {
+    const t = events[i].time;
+    // Apply all events at this timestamp
+    while (i < events.length && events[i].time === t) {
+      counts[events[i].status] += events[i].delta;
+      i++;
+    }
+    timeline.push({ time: t, ...counts });
+  }
+  return timeline;
 }
 
 function collapseGaps(timeline) {
