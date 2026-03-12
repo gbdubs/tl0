@@ -1348,18 +1348,10 @@ async function executeDelete(includeChildren) {
   }
 }
 
-// ── Transcript cache & helpers ────────────────────────────────
-const _transcriptCache = {};
-async function fetchTranscript(taskId) {
-  if (_transcriptCache[taskId]) return _transcriptCache[taskId];
-  try {
-    const res = await fetch('/api/transcripts/' + taskId);
-    if (!res.ok) return null;
-    const data = await res.json();
-    _transcriptCache[taskId] = data;
-    return data;
-  } catch (_) { return null; }
-}
+// ── Diff-stat cache ──────────────────────────────────────────
+const _diffStatCache = {};
+
+// ── Transcript helpers ────────────────────────────────────────
 
 async function showInvocationDetail(taskId, filename) {
   try {
@@ -2279,20 +2271,15 @@ function renderDetail(id) {
     html += `</div></div>`;
   }
 
-  // Execution summary (loaded async)
-  html += `<div id="exec-section-${task.id.slice(0,8)}"></div>`;
-  if (task.status === 'claimed' || task.status === 'done') {
+  // Execution summary (from index, no extra fetch needed)
+  if ((task.status === 'claimed' || task.status === 'done') && task.transcript && task.transcript.has_transcript) {
     const taskEvents = task.events && task.events.length ? task.events : null;
-    fetchTranscript(task.id).then(tx => {
-      const el = document.getElementById('exec-section-' + task.id.slice(0,8));
-      if (!el || !tx || !tx.has_transcript) return;
-      let s = '<div class="d-section"><div class="d-label" onclick="toggleSection(this)"><span>Execution</span></div>';
-      s += '<div class="d-section-body">';
-      if (taskEvents) s += renderEventTimeline(taskEvents);
-      s += renderExecSection(tx, task.id);
-      s += '</div></div>';
-      el.innerHTML = s;
-    });
+    const tx = task.transcript;
+    html += '<div class="d-section"><div class="d-label" onclick="toggleSection(this)"><span>Execution</span></div>';
+    html += '<div class="d-section-body">';
+    if (taskEvents) html += renderEventTimeline(taskEvents);
+    html += renderExecSection(tx, task.id);
+    html += '</div></div>';
   }
 
   // Task Lineage (unified: ancestors → current → children)
@@ -3447,9 +3434,15 @@ function _fmtCell(task, ts, col) {
       if (!val) return `<td class="num-cell" style="color:#d1d5db">—</td>`;
       const short = val.slice(0, 8);
       const cellId = 'ds-' + short;
+      if (_diffStatCache[val]) {
+        const d = _diffStatCache[val];
+        const label = d.files != null ? d.files + ' file' + (d.files !== 1 ? 's' : '') : short;
+        return `<td class="num-cell"><span id="${cellId}" class="sha-badge" onclick="event.stopPropagation();showDiff('${_esc(val)}')" title="View diff" style="cursor:pointer">${label}</span></td>`;
+      }
       fetch('/api/diff-stat/' + encodeURIComponent(val))
         .then(r => r.json())
         .then(d => {
+          _diffStatCache[val] = d;
           const el = document.getElementById(cellId);
           if (el) el.textContent = d.files != null ? d.files + ' file' + (d.files !== 1 ? 's' : '') : short;
         }).catch(() => {});
@@ -4307,27 +4300,6 @@ class Handler(BaseHTTPRequestHandler):
             from tl0.common import _get_index
             tasks = _get_index().get_all_tasks()
             body  = json.dumps(tasks).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        elif path == '/api/all-transcripts':
-            from tl0.common import _get_index
-            result = _get_index().get_all_transcript_summaries()
-            body = json.dumps(result).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        elif path.startswith('/api/transcripts/'):
-            task_id = path.split('/')[-1]
-            from tl0.common import _get_index
-            summary = _get_index().get_transcript_summary(task_id)
-            body = json.dumps(summary).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
