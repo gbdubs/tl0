@@ -908,13 +908,18 @@ function render() {
       const title = w.task_title
         ? escHtml(w.task_title)
         : '<span style="color:var(--text-muted)">(waiting for task)</span>';
-      const tid = w.task_id ? '<div class="task-id">' + escHtml(w.task_id.substring(0, 8)) + '</div>' : '';
+      const tid = w.task_id
+        ? '<div class="task-id"><a href="/viewer/?id=' + encodeURIComponent(w.task_id) + '" target="_blank" style="color:var(--text-muted); font-family:monospace; text-decoration:none;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + escHtml(w.task_id.substring(0, 8)) + ' ↗</a></div>'
+        : '';
+      const loopLogBtn = w.task_id
+        ? '<a class="btn btn-sm" href="/viewer/api/loop-log/' + encodeURIComponent(w.task_id) + '" target="_blank">Loop Log</a>'
+        : '';
       html += '<tr>';
       html += '<td style="font-family:monospace; font-size:11px">' + escHtml(w.slot_id) + '</td>';
       html += '<td><div class="task-title">' + title + '</div>' + tid + '</td>';
       html += '<td><span class="phase phase-' + escHtml(w.phase) + '">' + escHtml(w.phase) + '</span></td>';
       html += '<td>' + formatElapsed(w.elapsed_s) + '</td>';
-      html += '<td><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(w.slot_id) + '\')">Logs</button></td>';
+      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(w.slot_id) + '\')">Stdout</button>' + loopLogBtn + '</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';
@@ -945,7 +950,10 @@ function render() {
       html += '<td>' + dur + '</td>';
       html += '<td style="' + exitClass + '">' + (h.exit_code ?? '-') + '</td>';
       html += '<td>' + formatTime(h.finished_at) + '</td>';
-      html += '<td><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(h.slot_id) + '\')">Logs</button></td>';
+      const histLoopLog = h.task_id
+        ? '<a class="btn btn-sm" href="/viewer/api/loop-log/' + encodeURIComponent(h.task_id) + '" target="_blank">Loop Log</a>'
+        : '';
+      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(h.slot_id) + '\')">Stdout</button>' + histLoopLog + '</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';
