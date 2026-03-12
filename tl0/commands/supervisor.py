@@ -60,6 +60,7 @@ class LoopWorker:
     __slots__ = (
         "slot_id", "proc", "status_file", "log_lines",
         "started_at", "finished_at", "exit_code", "loop_args",
+        "last_task_id", "last_task_title",
     )
 
     LOG_CAPACITY = 500  # keep last N lines of stdout
@@ -74,6 +75,8 @@ class LoopWorker:
         self.finished_at: float | None = None
         self.exit_code: int | None = None
         self.loop_args = loop_args
+        self.last_task_id: str = ""
+        self.last_task_title: str = ""
 
     def poll(self) -> int | None:
         if self.exit_code is not None:
@@ -87,7 +90,12 @@ class LoopWorker:
     def read_status(self) -> dict:
         try:
             if self.status_file.exists():
-                return json.loads(self.status_file.read_text())
+                status = json.loads(self.status_file.read_text())
+                if status.get("task_id"):
+                    self.last_task_id = status["task_id"]
+                if status.get("task_title"):
+                    self.last_task_title = status["task_title"]
+                return status
         except (json.JSONDecodeError, OSError):
             pass
         return {}
@@ -192,17 +200,17 @@ class SupervisorState:
             for slot_id in finished_ids:
                 w = self.workers.pop(slot_id)
                 w.drain_stdout()  # final drain
-                status = w.read_status()
+                w.read_status()  # final read to capture any last task_id/title
                 self.history.append({
                     "slot_id": w.slot_id,
-                    "task_id": status.get("task_id", ""),
-                    "task_title": status.get("task_title", ""),
+                    "task_id": w.last_task_id,
+                    "task_title": w.last_task_title,
                     "started_at": w.started_at,
                     "finished_at": w.finished_at,
                     "exit_code": w.exit_code,
                     "log_tail": w.log_lines[-20:],
                 })
-                if w.exit_code == 0 and status.get("task_id"):
+                if w.exit_code == 0 and w.last_task_id:
                     self.total_completed += 1
                 self.history = self.history[-50:]
                 try:
@@ -756,6 +764,7 @@ tr:last-child td { border-bottom: none; }
         <button class="btn btn-danger" id="btn-kill" title="Kill all loops immediately">Kill All</button>
         <button class="btn btn-sm" id="btn-free-all" title="Free all claimed tasks back to pending">Free All</button>
         <button class="btn btn-sm" id="btn-reset-failed" title="Reset failed tasks back to pending so they can be retried" style="display:none">Reset Failed</button>
+        <button class="btn btn-sm" id="btn-reset-inactive" title="Free claimed tasks whose workers are no longer active" style="display:none">Reset Inactive</button>
       </div>
     </div>
 
@@ -980,6 +989,11 @@ function renderTaskSummary() {
   if (resetFailedBtn) {
     resetFailedBtn.style.display = (taskCounts['failed'] || 0) > 0 ? '' : 'none';
   }
+  // Show Reset Inactive button only when there are claimed tasks
+  const resetInactiveBtn = document.getElementById('btn-reset-inactive');
+  if (resetInactiveBtn) {
+    resetInactiveBtn.style.display = (taskCounts['claimed'] || 0) > 0 ? '' : 'none';
+  }
 }
 
 async function refreshTasks() {
@@ -1047,6 +1061,14 @@ document.getElementById('btn-reset-failed').onclick = async () => {
   const data = await res.json();
   if (data.reset !== undefined) {
     alert('Reset ' + data.reset + ' failed task(s) back to pending.');
+  }
+  refreshTasks();
+};
+document.getElementById('btn-reset-inactive').onclick = async () => {
+  if (!confirm('Free claimed tasks that have no active worker?\\n\\nThis only affects tasks whose worker has exited. Tasks with a running worker are left alone.')) return;
+  const res = await apiPost('/api/reset-claimed-inactive');
+  if (res && res.freed !== undefined) {
+    alert('Freed ' + res.freed + ' inactive claimed task(s).');
   }
   refreshTasks();
 };
@@ -1531,6 +1553,25 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 if reset:
                     git_commit(f"reset-failed: {len(reset)} tasks reset to pending")
                 self._respond_json({"ok": True, "reset": len(reset)})
+            except Exception as e:
+                self._respond_error(500, str(e))
+
+        elif path == '/api/reset-claimed-inactive':
+            try:
+                from tl0.common import load_all_tasks, save_task, task_status, task_claimed_by, now_iso, git_commit
+                # Collect task_ids that active workers are working on
+                snapshot = self.state.get_snapshot()
+                active_task_ids = {w["task_id"] for w in snapshot["active"] if w.get("task_id")}
+                tasks = load_all_tasks()
+                freed = []
+                for task in tasks:
+                    if task_status(task) == "claimed" and task["id"] not in active_task_ids:
+                        task["events"].append({"type": "freed", "at": now_iso(), "by": "supervisor:reset-inactive"})
+                        save_task(task)
+                        freed.append(task["id"])
+                if freed:
+                    git_commit(f"reset-inactive: freed {len(freed)} claimed tasks with no active worker")
+                self._respond_json({"ok": True, "freed": len(freed)})
             except Exception as e:
                 self._respond_error(500, str(e))
 
