@@ -909,17 +909,17 @@ function render() {
         ? escHtml(w.task_title)
         : '<span style="color:var(--text-muted)">(waiting for task)</span>';
       const tid = w.task_id
-        ? '<div class="task-id"><a href="/viewer/?id=' + encodeURIComponent(w.task_id) + '" target="_blank" style="color:var(--text-muted); font-family:monospace; text-decoration:none;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + escHtml(w.task_id.substring(0, 8)) + ' ↗</a></div>'
+        ? '<div class="task-id"><a href="/viewer/?id=' + encodeURIComponent(w.task_id) + '&view=tree" target="_blank" style="color:var(--text-muted); font-family:monospace; text-decoration:none;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + escHtml(w.task_id.substring(0, 8)) + ' ↗</a></div>'
         : '';
-      const loopLogBtn = w.task_id
-        ? '<a class="btn btn-sm" href="/viewer/api/loop-log/' + encodeURIComponent(w.task_id) + '" target="_blank">Loop Log</a>'
+      const transcriptBtn = w.task_id
+        ? '<a class="btn btn-sm" href="/viewer/?id=' + encodeURIComponent(w.task_id) + '&view=tree&transcript=latest" target="_blank">Transcript</a>'
         : '';
       html += '<tr>';
       html += '<td style="font-family:monospace; font-size:11px">' + escHtml(w.slot_id) + '</td>';
       html += '<td><div class="task-title">' + title + '</div>' + tid + '</td>';
       html += '<td><span class="phase phase-' + escHtml(w.phase) + '">' + escHtml(w.phase) + '</span></td>';
       html += '<td>' + formatElapsed(w.elapsed_s) + '</td>';
-      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(w.slot_id) + '\')">Stdout</button>' + loopLogBtn + '</td>';
+      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(w.slot_id) + '\')">Stdout</button>' + transcriptBtn + '</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';
@@ -939,7 +939,7 @@ function render() {
         ? escHtml(h.task_title)
         : '<span style="color:var(--text-muted)">' + escHtml(h.slot_id) + '</span>';
       const title = h.task_id
-        ? '<a href="/viewer/?id=' + encodeURIComponent(h.task_id) + '" style="color:inherit; text-decoration:underline; text-decoration-color:var(--text-muted); text-underline-offset:2px">' + titleText + '</a>'
+        ? '<a href="/viewer/?id=' + encodeURIComponent(h.task_id) + '&view=tree" style="color:inherit; text-decoration:underline; text-decoration-color:var(--text-muted); text-underline-offset:2px">' + titleText + '</a>'
         : titleText;
       const dur = (h.finished_at && h.started_at)
         ? formatElapsed(h.finished_at - h.started_at)
@@ -950,10 +950,10 @@ function render() {
       html += '<td>' + dur + '</td>';
       html += '<td style="' + exitClass + '">' + (h.exit_code ?? '-') + '</td>';
       html += '<td>' + formatTime(h.finished_at) + '</td>';
-      const histLoopLog = h.task_id
-        ? '<a class="btn btn-sm" href="/viewer/api/loop-log/' + encodeURIComponent(h.task_id) + '" target="_blank">Loop Log</a>'
+      const histTranscript = h.task_id
+        ? '<a class="btn btn-sm" href="/viewer/?id=' + encodeURIComponent(h.task_id) + '&view=tree&transcript=latest" target="_blank">Transcript</a>'
         : '';
-      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(h.slot_id) + '\')">Stdout</button>' + histLoopLog + '</td>';
+      html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(h.slot_id) + '\')">Stdout</button>' + histTranscript + '</td>';
       html += '</tr>';
     }
     html += '</tbody></table>';

@@ -1233,6 +1233,15 @@ async function loadTasks() {
       _initialLoad = false;
       if (state.selectedId && taskMap[state.selectedId]) {
         _activateTask(state.selectedId);
+        // Auto-open transcript if ?transcript=latest is in the URL
+        const _urlP = new URLSearchParams(location.search);
+        if (_urlP.get('transcript') === 'latest') {
+          const _t = taskMap[state.selectedId];
+          if (_t && _t.transcript && _t.transcript.invocations && _t.transcript.invocations.length) {
+            const _lastInv = _t.transcript.invocations[_t.transcript.invocations.length - 1];
+            showInvocationDetail(state.selectedId, _lastInv.file);
+          }
+        }
       } else if (state.selectedId) {
         state.selectedId = null;
         persist(true);
