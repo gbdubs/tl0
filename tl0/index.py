@@ -436,8 +436,22 @@ class Index:
 
             ready.append(task)
 
-        # Sort by creation time (oldest first)
-        ready.sort(key=lambda t: task_created_at(t) or "")
+        # Spread siblings apart: prefer tasks whose parent does NOT already
+        # have a claimed (in-progress) task.  This reduces merge conflicts
+        # when multiple workers poll at the same time.
+        in_progress_parents: set[str] = set()
+        for (cby,) in self._conn.execute(
+            "SELECT created_by FROM tasks WHERE status = 'claimed' AND created_by IS NOT NULL"
+        ).fetchall():
+            in_progress_parents.add(cby)
+
+        def _sort_key(t: dict) -> tuple:
+            parent = t.get("created_by") or ""
+            # 0 = no sibling in progress (preferred), 1 = sibling in progress
+            sibling_running = 1 if parent in in_progress_parents else 0
+            return (sibling_running, task_created_at(t) or "")
+
+        ready.sort(key=_sort_key)
         return ready
 
     # ------------------------------------------------------------------
