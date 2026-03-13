@@ -2632,15 +2632,23 @@ function buildTimeline(tasks) {
   const timeline = [];
   let i = 0;
 
+  // Baseline counts to subtract when a time filter is active, so the y-axis
+  // shows progress within the window (e.g. "done" starts at 0, not 10,000).
+  let baseline = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
+
   if (timeFloor > 0) {
     // Pre-compute state at timeFloor by processing all events before it
     while (i < events.length && events[i].time < timeFloor) {
       counts[events[i].status] += events[i].delta;
       i++;
     }
-    // Emit an initial point at timeFloor reflecting pre-existing state
+    // Record the baseline so we can subtract it from all emitted points
+    baseline = { ...counts };
+    // Emit an initial point at timeFloor with zeroed baseline
     if (i < events.length) {
-      timeline.push({ time: timeFloor, ...counts });
+      const point = { time: timeFloor };
+      for (const s of STATUS_ORDER) point[s] = counts[s] - baseline[s];
+      timeline.push(point);
     }
   }
 
@@ -2651,7 +2659,9 @@ function buildTimeline(tasks) {
       counts[events[i].status] += events[i].delta;
       i++;
     }
-    timeline.push({ time: t, ...counts });
+    const point = { time: t };
+    for (const s of STATUS_ORDER) point[s] = Math.max(0, counts[s] - baseline[s]);
+    timeline.push(point);
   }
   return timeline;
 }
