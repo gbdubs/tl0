@@ -284,6 +284,39 @@ def git_commit(message: str):
     )
 
 
+class task_lock:
+    """Context manager providing an exclusive file lock for task mutations.
+
+    Prevents TOCTOU races where two workers both read a task as pending
+    and both write a claimed event.  All commands that mutate task state
+    (claim, free, complete, fail) should wrap their read-check-write
+    sequence inside this lock.
+
+    Usage::
+
+        with task_lock():
+            task = load_task(task_id)
+            ...
+            save_task(task)
+    """
+
+    _lock_path = TASKS_DIR / ".claim.lock"
+
+    def __enter__(self):
+        import fcntl
+
+        self._f = open(self._lock_path, "w")
+        fcntl.flock(self._f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        import fcntl
+
+        fcntl.flock(self._f, fcntl.LOCK_UN)
+        self._f.close()
+        return False
+
+
 def task_status_map(tasks: list[dict]) -> dict[str, str]:
     """Build a map of task_id -> derived status."""
     return {t["id"]: task_status(t) for t in tasks}
