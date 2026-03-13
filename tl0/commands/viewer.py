@@ -3467,7 +3467,7 @@ const TABLE_COLUMNS = [
   { key: 'tool_errors',      label: 'Tool Errors',     type: 'num',    default: true },
   { key: 'merge_conflicts',  label: 'Merge Conflicts', type: 'num',    default: false },
   { key: 'Read',             label: 'Read',            type: 'tool',   default: true },
-  { key: 'Edit',             label: 'Edit',            type: 'tool',   default: true },
+  { key: 'Edit',             label: 'Edit',            type: 'tool',   default: false },
   { key: 'Write',            label: 'Write',           type: 'tool',   default: false },
   { key: 'Bash',             label: 'Bash',            type: 'tool',   default: true },
   { key: 'Glob',             label: 'Glob',            type: 'tool',   default: false },
