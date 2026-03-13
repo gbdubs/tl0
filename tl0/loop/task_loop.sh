@@ -557,17 +557,11 @@ merge_and_push() {
         git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
         git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-        _release_merge_lock
         if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt"; then
           warn "Could not merge main into task branch after pre-commit failure. Aborting retries."
-          _acquire_merge_lock 2>/dev/null || true
           break
         fi
         reconcile_generated_files "$worktree"
-        if ! _acquire_merge_lock; then
-          warn "Could not re-acquire merge lock after pre-commit fixup. Aborting retries."
-          break
-        fi
         sleep $((1 + RANDOM % 3))
         continue
       fi
@@ -575,6 +569,19 @@ merge_and_push() {
       # If commit was a no-op (no changes), don't record a stale SHA
       if [ "$sha_candidate" = "$pre_commit_sha" ]; then
         sha_candidate=""
+      fi
+      # Verify the commit has actual file changes (detect empty squash-merge)
+      if [ -n "$sha_candidate" ]; then
+        local new_tree old_tree
+        new_tree=$(git -C "$CODE_REPO" rev-parse HEAD^{tree} 2>/dev/null || true)
+        old_tree=$(git -C "$CODE_REPO" rev-parse HEAD~1^{tree} 2>/dev/null || true)
+        if [ "$new_tree" = "$old_tree" ]; then
+          warn "Empty squash commit detected (attempt $attempt) — agent changes were lost. Retrying..."
+          git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
+          git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+          sleep $((1 + RANDOM % 3))
+          continue
+        fi
       fi
       if git -C "$CODE_REPO" push origin main 2>/dev/null; then
         pushed=true
@@ -593,22 +600,11 @@ merge_and_push() {
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-    # Release lock while Claude resolves merge conflicts (can be slow)
-    _release_merge_lock
-
     if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt"; then
       warn "Could not merge main into task branch on attempt $attempt. Aborting retries."
-      # Re-acquire lock just so the post-loop release doesn't error
-      _acquire_merge_lock 2>/dev/null || true
       break
     fi
     reconcile_generated_files "$worktree"
-
-    # Re-acquire lock for the squash+commit+push sequence
-    if ! _acquire_merge_lock; then
-      warn "Could not re-acquire merge lock. Aborting retries."
-      break
-    fi
 
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
@@ -637,6 +633,19 @@ merge_and_push() {
     sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     if [ "$sha_candidate" = "$pre_commit_sha" ]; then
       sha_candidate=""
+    fi
+    # Verify the commit has actual file changes (detect empty squash-merge)
+    if [ -n "$sha_candidate" ]; then
+      local new_tree2 old_tree2
+      new_tree2=$(git -C "$CODE_REPO" rev-parse HEAD^{tree} 2>/dev/null || true)
+      old_tree2=$(git -C "$CODE_REPO" rev-parse HEAD~1^{tree} 2>/dev/null || true)
+      if [ "$new_tree2" = "$old_tree2" ]; then
+        warn "Empty squash commit detected after re-merge (attempt $attempt) — agent changes were lost. Retrying..."
+        git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
+        git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+        sleep $((1 + RANDOM % 3))
+        continue
+      fi
     fi
     if git -C "$CODE_REPO" push origin main 2>/dev/null; then
       pushed=true
@@ -892,7 +901,14 @@ if text_parts:
 
   # --- Check if claude committed anything ---
   local commit_count
-  commit_count=$(git -C "$worktree" rev-list --count origin/main.."$branch" 2>/dev/null || echo "0")
+  if ! commit_count=$(git -C "$worktree" rev-list --count origin/main.."$branch" 2>/dev/null); then
+    warn "Failed to count commits on branch $branch in worktree $worktree"
+    git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
+    print_resume_instructions "$task_id" "$short_id" "$branch" "Could not count branch commits"
+    tl0m free 2>/dev/null || true
+    TASK_TRANSCRIPT_DIR=""
+    return 1
+  fi
 
   if [ "$commit_count" -eq 0 ]; then
     if [ -n "$result_text" ]; then
@@ -981,6 +997,28 @@ if text_parts:
 
   # --- Capture merge SHA (set atomically inside merge_and_push) ---
   local merge_sha="$MERGE_AND_PUSH_SHA"
+
+  # --- Validate produces files exist in the pushed commit ---
+  if [ -n "$merge_sha" ]; then
+    local produces
+    produces=$(echo "$task_json" | python3 -c "
+import json, sys
+t = json.load(sys.stdin)[0]
+for p in t.get('produces', []):
+    print(p)
+" 2>/dev/null || true)
+    if [ -n "$produces" ]; then
+      local missing=""
+      while IFS= read -r filepath; do
+        if ! git -C "$CODE_REPO" cat-file -e "$merge_sha:$filepath" 2>/dev/null; then
+          missing="$missing $filepath"
+        fi
+      done <<< "$produces"
+      if [ -n "$missing" ]; then
+        warn "Push succeeded but expected files missing from commit:$missing"
+      fi
+    fi
+  fi
 
   # --- Mark task done ---
   if [ -z "$result_text" ]; then
