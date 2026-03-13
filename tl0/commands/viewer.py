@@ -731,6 +731,35 @@ mark {
 }
 .t-title mark { font-weight: 600; }
 
+/* ── Chart time filter ────────────────────────────────────── */
+#chart-time-filter {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 0 12px; flex-shrink: 0; flex-wrap: wrap;
+}
+#chart-time-filter .tf-label {
+  font-size: 11px; color: var(--text-muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+#chart-time-filter .tf-btn {
+  padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  background: #f3f4f6; border: 1px solid var(--border); color: var(--text);
+  font-size: 11px; transition: all 0.15s; white-space: nowrap;
+}
+#chart-time-filter .tf-btn:hover { background: #e5e7eb; }
+#chart-time-filter .tf-btn.active {
+  background: var(--accent); border-color: var(--accent); color: white;
+}
+#chart-time-filter .tf-custom-wrap {
+  display: flex; align-items: center; gap: 4px;
+}
+#chart-time-filter .tf-custom-wrap input[type="datetime-local"] {
+  font-size: 11px; padding: 3px 6px; border: 1px solid var(--border);
+  border-radius: 4px; background: white; color: var(--text);
+}
+#chart-time-filter .tf-supervisor-time {
+  font-size: 10px; color: var(--text-muted); margin-left: auto;
+}
+
 /* ── Chart view ──────────────────────────────────────────── */
 #chart-container {
   display: none; flex: 1; flex-direction: column;
@@ -1064,6 +1093,24 @@ mark {
   </main>
 
   <div id="chart-container">
+    <div id="chart-time-filter">
+      <span class="tf-label">Time range:</span>
+      <button class="tf-btn active" data-range="all" onclick="setChartTimeRange('all')">All time</button>
+      <button class="tf-btn" data-range="supervisor" onclick="setChartTimeRange('supervisor')" id="tf-supervisor-btn" style="display:none">Since supervisor start</button>
+      <button class="tf-btn" data-range="5m" onclick="setChartTimeRange('5m')">5m</button>
+      <button class="tf-btn" data-range="15m" onclick="setChartTimeRange('15m')">15m</button>
+      <button class="tf-btn" data-range="30m" onclick="setChartTimeRange('30m')">30m</button>
+      <button class="tf-btn" data-range="1h" onclick="setChartTimeRange('1h')">1h</button>
+      <button class="tf-btn" data-range="3h" onclick="setChartTimeRange('3h')">3h</button>
+      <button class="tf-btn" data-range="6h" onclick="setChartTimeRange('6h')">6h</button>
+      <button class="tf-btn" data-range="12h" onclick="setChartTimeRange('12h')">12h</button>
+      <button class="tf-btn" data-range="24h" onclick="setChartTimeRange('24h')">24h</button>
+      <div class="tf-custom-wrap">
+        <button class="tf-btn" data-range="custom" onclick="setChartTimeRange('custom')">Custom since:</button>
+        <input type="datetime-local" id="tf-custom-dt" onchange="onCustomTimeChange()" />
+      </div>
+      <span class="tf-supervisor-time" id="tf-supervisor-time"></span>
+    </div>
     <div id="chart-svg-wrap"></div>
     <div id="chart-legend"></div>
   </div>
@@ -1105,7 +1152,7 @@ mark {
 </div>
 <div id="chart-tooltip"></div>
 
-<script>window.__GITHUB_REPO_URL__ = '{{GITHUB_REPO_URL}}';window.__SUPERVISOR_ENABLED__ = false;window.__SUPERVISOR_API_BASE__ = '';</script>
+<script>window.__GITHUB_REPO_URL__ = '{{GITHUB_REPO_URL}}';window.__SUPERVISOR_ENABLED__ = false;window.__SUPERVISOR_API_BASE__ = '';window.__SUPERVISOR_STARTED_AT__ = null;</script>
 <script>
 // ── State ────────────────────────────────────────────────────
 let allTasks = [];
@@ -2481,7 +2528,65 @@ function inferStatusAt(task, t) {
   return 'pending';
 }
 
+// ── Chart time range filter ──────────────────────────────────
+let _chartTimeRange = 'all';    // 'all', 'supervisor', '5m', '15m', '30m', '1h', '3h', '6h', '12h', '24h', 'custom'
+let _chartCustomSince = null;   // ms timestamp for custom mode
+
+const TIME_RANGE_MS = {
+  '5m':  5 * 60 * 1000,
+  '15m': 15 * 60 * 1000,
+  '30m': 30 * 60 * 1000,
+  '1h':  60 * 60 * 1000,
+  '3h':  3 * 60 * 60 * 1000,
+  '6h':  6 * 60 * 60 * 1000,
+  '12h': 12 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+};
+
+function _getChartTimeFloor() {
+  if (_chartTimeRange === 'all') return 0;
+  if (_chartTimeRange === 'supervisor' && window.__SUPERVISOR_STARTED_AT__) {
+    return window.__SUPERVISOR_STARTED_AT__;
+  }
+  if (_chartTimeRange === 'custom' && _chartCustomSince) return _chartCustomSince;
+  const ms = TIME_RANGE_MS[_chartTimeRange];
+  if (ms) return Date.now() - ms;
+  return 0;
+}
+
+function setChartTimeRange(range) {
+  _chartTimeRange = range;
+  // Update active button styling
+  document.querySelectorAll('#chart-time-filter .tf-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.range === range);
+  });
+  if (state.view === 'chart' && !state.selectedId) renderChart();
+}
+
+function onCustomTimeChange() {
+  const input = document.getElementById('tf-custom-dt');
+  if (input.value) {
+    _chartCustomSince = new Date(input.value).getTime();
+    setChartTimeRange('custom');
+  }
+}
+
+function _initChartTimeFilter() {
+  // Show supervisor button if we have a start time
+  const supBtn = document.getElementById('tf-supervisor-btn');
+  const supTime = document.getElementById('tf-supervisor-time');
+  if (window.__SUPERVISOR_STARTED_AT__) {
+    supBtn.style.display = '';
+    const d = new Date(window.__SUPERVISOR_STARTED_AT__);
+    supTime.textContent = 'Supervisor started: ' + d.toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+  }
+}
+
 function buildTimeline(tasks) {
+  const timeFloor = _getChartTimeFloor();
+
   // Collect all event timestamps
   const times = new Set();
   tasks.forEach(t => {
@@ -2489,7 +2594,7 @@ function buildTimeline(tasks) {
     if (t.claimed_at)   times.add(new Date(t.claimed_at).getTime());
     if (t.completed_at) times.add(new Date(t.completed_at).getTime());
   });
-  const sorted = [...times].filter(t => !isNaN(t)).sort((a, b) => a - b);
+  const sorted = [...times].filter(t => !isNaN(t) && t >= timeFloor).sort((a, b) => a - b);
   if (sorted.length === 0) return [];
 
   return sorted.map(t => {
@@ -3758,6 +3863,7 @@ function applyStateToUI() {
 // ── Boot ─────────────────────────────────────────────────────
 loadSavedState();
 applyStateToUI();
+_initChartTimeFilter();
 
 // Close view dropdown on outside click
 document.addEventListener('click', e => {

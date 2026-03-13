@@ -139,6 +139,7 @@ class SupervisorState:
         self.quota_auto_drained = False  # True if we auto-drained due to high utilization
         self._pre_drain_parallelism: int = 0
         self.skip_auto_drain = skip_auto_drain
+        self.started_at = time.time()
 
     def _next_bird_name(self) -> str:
         """Return the first bird name not currently in use by an active worker."""
@@ -193,14 +194,23 @@ class SupervisorState:
                 w = self.workers.pop(slot_id)
                 w.drain_stdout()  # final drain
                 status = w.read_status()
+                task_id = status.get("task_id", "")
+                merge_sha = ""
+                if task_id:
+                    try:
+                        task = load_task(task_id)
+                        merge_sha = task.get("merge_sha") or ""
+                    except Exception:
+                        pass
                 self.history.append({
                     "slot_id": w.slot_id,
-                    "task_id": status.get("task_id", ""),
+                    "task_id": task_id,
                     "task_title": status.get("task_title", ""),
                     "started_at": w.started_at,
                     "finished_at": w.finished_at,
                     "exit_code": w.exit_code,
                     "log_tail": w.log_lines[-20:],
+                    "merge_sha": merge_sha,
                 })
                 if w.exit_code == 0 and status.get("task_id"):
                     self.total_completed += 1
@@ -330,6 +340,7 @@ class SupervisorState:
                 "total_completed": self.total_completed,
                 "active": sorted(active, key=lambda x: x["started_at"]),
                 "history": list(self.history),
+                "supervisor_started_at": self.started_at,
             }
 
     def get_logs(self, slot_id: str) -> list[str] | None:
@@ -571,6 +582,8 @@ tr:last-child td { border-bottom: none; }
 .task-title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-id { font-family: monospace; font-size: 11px; color: var(--text-muted); }
 .empty-state { color: var(--text-muted); font-style: italic; padding: 12px 8px; }
+.sha-badge { display: inline-block; font-family: 'SF Mono', 'Menlo', 'Monaco', monospace; font-size: 11px; background: #e0e7ff; color: #3730a3; border-radius: 4px; padding: 1px 6px; text-decoration: none; }
+.sha-badge:hover { background: #c7d2fe; }
 
 /* Task summary chips */
 .task-summary {
@@ -842,8 +855,10 @@ tr:last-child td { border-bottom: none; }
   </div>
 
 <script>
+const GITHUB_REPO_URL = '{{GITHUB_REPO_URL}}';
 let state = { desired_parallelism: 0, active_count: 0, total_completed: 0, active: [], history: [] };
 let taskCounts = {};
+let workerSort = { col: 'slot', dir: 'asc' };
 
 function formatElapsed(s) {
   s = Math.floor(s);
@@ -901,10 +916,27 @@ function render() {
   if (state.active.length === 0) {
     wc.innerHTML = '<div class="empty-state">No active loops. Increase parallelism to start.</div>';
   } else {
+    const sortedActive = state.active.slice().sort((a, b) => {
+      let av, bv;
+      if (workerSort.col === 'slot') { av = a.slot_id; bv = b.slot_id; }
+      else if (workerSort.col === 'task') { av = a.task_title || ''; bv = b.task_title || ''; }
+      else if (workerSort.col === 'phase') { av = a.phase; bv = b.phase; }
+      else if (workerSort.col === 'elapsed') { av = a.elapsed_s; bv = b.elapsed_s; }
+      else { av = a.started_at; bv = b.started_at; }
+      if (av < bv) return workerSort.dir === 'asc' ? -1 : 1;
+      if (av > bv) return workerSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    function thSort(col, label) {
+      const active = workerSort.col === col;
+      const arrow = active ? (workerSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      const style = 'cursor:pointer; user-select:none;' + (active ? ' color:var(--accent)' : '');
+      return '<th style="' + style + '" onclick="setWorkerSort(\'' + col + '\')">' + label + arrow + '</th>';
+    }
     let html = '<table><thead><tr>';
-    html += '<th>Slot</th><th>Task</th><th>Phase</th><th>Elapsed</th><th></th>';
+    html += thSort('slot', 'Slot') + thSort('task', 'Task') + thSort('phase', 'Phase') + thSort('elapsed', 'Elapsed') + '<th></th>';
     html += '</tr></thead><tbody>';
-    for (const w of state.active) {
+    for (const w of sortedActive) {
       const title = w.task_title
         ? escHtml(w.task_title)
         : '<span style="color:var(--text-muted)">(waiting for task)</span>';
@@ -932,7 +964,7 @@ function render() {
     hc.innerHTML = '<div class="empty-state">No completions yet.</div>';
   } else {
     let html = '<table><thead><tr>';
-    html += '<th>Task</th><th>Duration</th><th>Exit</th><th>Finished</th><th></th>';
+    html += '<th>Task</th><th>Duration</th><th>Exit</th><th>Finished</th><th>Commit</th><th></th>';
     html += '</tr></thead><tbody>';
     for (const h of state.history.slice().reverse()) {
       const titleText = h.task_title
@@ -945,11 +977,17 @@ function render() {
         ? formatElapsed(h.finished_at - h.started_at)
         : '-';
       const exitClass = h.exit_code === 0 ? 'color:#065f46' : 'color:#991b1b; font-weight:600';
+      const shaCell = h.merge_sha
+        ? (GITHUB_REPO_URL
+            ? '<a class="sha-badge" href="' + GITHUB_REPO_URL + '/commit/' + encodeURIComponent(h.merge_sha) + '" target="_blank" rel="noopener">' + escHtml(h.merge_sha.slice(0, 8)) + '</a>'
+            : '<span class="sha-badge">' + escHtml(h.merge_sha.slice(0, 8)) + '</span>')
+        : '';
       html += '<tr>';
       html += '<td class="task-title">' + title + '</td>';
       html += '<td>' + dur + '</td>';
       html += '<td style="' + exitClass + '">' + (h.exit_code ?? '-') + '</td>';
       html += '<td>' + formatTime(h.finished_at) + '</td>';
+      html += '<td>' + shaCell + '</td>';
       const histLoopLog = h.task_id
         ? '<a class="btn btn-sm" href="/viewer/api/loop-log/' + encodeURIComponent(h.task_id) + '" target="_blank">Loop Log</a>'
         : '';
@@ -962,6 +1000,16 @@ function render() {
 
   // Task summary
   renderTaskSummary();
+}
+
+function setWorkerSort(col) {
+  if (workerSort.col === col) {
+    workerSort.dir = workerSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    workerSort.col = col;
+    workerSort.dir = 'asc';
+  }
+  render();
 }
 
 function renderTaskSummary() {
@@ -1321,7 +1369,8 @@ class SupervisorHandler(BaseHTTPRequestHandler):
         if path in ('/', '/index.html'):
             rendered = SUPERVISOR_HTML \
                 .replace('{{PAGE_TITLE}}', html.escape(self.page_title)) \
-                .replace('{{HEADER_BG}}', self.header_bg)
+                .replace('{{HEADER_BG}}', self.header_bg) \
+                .replace('{{GITHUB_REPO_URL}}', self.github_repo_url)
             self._respond(200, rendered, 'text/html')
 
         elif path == '/favicon.svg':
@@ -1377,6 +1426,11 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             rendered = rendered.replace(
                 "window.__SUPERVISOR_API_BASE__ = ''",
                 "window.__SUPERVISOR_API_BASE__ = '/viewer'",
+                1,
+            )
+            rendered = rendered.replace(
+                "window.__SUPERVISOR_STARTED_AT__ = null",
+                f"window.__SUPERVISOR_STARTED_AT__ = {self.state.started_at * 1000:.0f}",
                 1,
             )
             self._respond(200, rendered, 'text/html')
