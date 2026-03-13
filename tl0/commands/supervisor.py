@@ -34,6 +34,7 @@ from tl0.common import (
 )
 from tl0.config import load_config
 from tl0.commands.viewer import HTML as VIEWER_HTML, _build_favicon_svg as _build_viewer_favicon, _build_transcript_messages, _build_transcript_timeline
+from tl0.commands.shared_modal import SHARED_MODAL_CSS, SHARED_MODAL_JS
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -442,6 +443,7 @@ SUPERVISOR_HTML = r"""<!DOCTYPE html>
   --border: #e1e4e8;
   --text: #1f2937;
   --text-muted: #6b7280;
+  --accent: #2563eb;
   --header-h: 48px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -609,16 +611,16 @@ tr:last-child td { border-bottom: none; }
 }
 .task-chip .count { font-weight: 700; }
 
-/* Log viewer */
-.log-overlay {
+/* Stdout log viewer (supervisor-specific) */
+.stdout-overlay {
   display: none;
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
   z-index: 100;
 }
-.log-overlay.active { display: flex; align-items: center; justify-content: center; }
-.log-panel {
+.stdout-overlay.active { display: flex; align-items: center; justify-content: center; }
+.stdout-panel {
   background: #1e1e1e;
   color: #d4d4d4;
   border-radius: 10px;
@@ -629,7 +631,7 @@ tr:last-child td { border-bottom: none; }
   flex-direction: column;
   overflow: hidden;
 }
-.log-header {
+.stdout-header {
   display: flex;
   align-items: center;
   padding: 12px 16px;
@@ -637,8 +639,8 @@ tr:last-child td { border-bottom: none; }
   border-bottom: 1px solid #404040;
   gap: 12px;
 }
-.log-header h3 { font-size: 13px; font-weight: 600; color: #e5e7eb; }
-.log-header .close-btn {
+.stdout-header h3 { font-size: 13px; font-weight: 600; color: #e5e7eb; }
+.stdout-header .close-btn {
   margin-left: auto;
   background: none;
   border: none;
@@ -647,8 +649,8 @@ tr:last-child td { border-bottom: none; }
   font-size: 18px;
   padding: 4px 8px;
 }
-.log-header .close-btn:hover { color: white; }
-.log-body {
+.stdout-header .close-btn:hover { color: white; }
+.stdout-body {
   flex: 1;
   overflow: auto;
   padding: 12px 16px;
@@ -658,6 +660,9 @@ tr:last-child td { border-bottom: none; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* Shared modal styles */
+{{SHARED_MODAL_CSS}}
 
 /* Create task form */
 .create-toggle {
@@ -851,19 +856,21 @@ tr:last-child td { border-bottom: none; }
     </div>
   </div>
 
-  <!-- Log overlay -->
-  <div class="log-overlay" id="log-overlay">
-    <div class="log-panel">
-      <div class="log-header">
+  <!-- Stdout log overlay -->
+  <div class="stdout-overlay" id="log-overlay">
+    <div class="stdout-panel">
+      <div class="stdout-header">
         <h3 id="log-title">Logs</h3>
         <button class="close-btn" id="log-close">&times;</button>
       </div>
-      <div class="log-body" id="log-body"></div>
+      <div class="stdout-body" id="log-body"></div>
     </div>
   </div>
 
 <script>
 const GITHUB_REPO_URL = '{{GITHUB_REPO_URL}}';
+window._modalApiBase = '/viewer';
+{{SHARED_MODAL_JS}}
 let state = { desired_parallelism: 0, active_count: 0, total_completed: 0, active: [], history: [] };
 let taskCounts = {};
 let workerSort = { col: 'slot', dir: 'asc' };
@@ -952,7 +959,7 @@ function render() {
         ? '<div class="task-id"><a href="/viewer/?id=' + encodeURIComponent(w.task_id) + '&view=tree" target="_blank" style="color:var(--text-muted); font-family:monospace; text-decoration:none;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + escHtml(w.task_id.substring(0, 8)) + ' ↗</a></div>'
         : '';
       const transcriptBtn = w.task_id
-        ? '<a class="btn btn-sm" href="/viewer/?id=' + encodeURIComponent(w.task_id) + '&view=tree&transcript=latest" target="_blank">Transcript</a>'
+        ? '<button class="btn btn-sm" onclick="showLatestTranscript(\'' + escHtml(w.task_id) + '\')">Transcript</button>'
         : '';
       html += '<tr>';
       html += '<td style="font-family:monospace; font-size:11px">' + escHtml(w.slot_id) + '</td>';
@@ -986,9 +993,7 @@ function render() {
         : '-';
       const exitClass = h.exit_code === 0 ? 'color:#065f46' : 'color:#991b1b; font-weight:600';
       const shaCell = h.merge_sha
-        ? (GITHUB_REPO_URL
-            ? '<a class="sha-badge" href="' + GITHUB_REPO_URL + '/commit/' + encodeURIComponent(h.merge_sha) + '" target="_blank" rel="noopener">' + escHtml(h.merge_sha.slice(0, 8)) + '</a>'
-            : '<span class="sha-badge">' + escHtml(h.merge_sha.slice(0, 8)) + '</span>')
+        ? '<span class="sha-badge" onclick="event.stopPropagation();showDiff(\'' + escHtml(h.merge_sha) + '\')" title="View diff">' + escHtml(h.merge_sha.slice(0, 8)) + '</span>'
         : '';
       html += '<tr>';
       html += '<td class="task-title">' + title + '</td>';
@@ -997,7 +1002,7 @@ function render() {
       html += '<td>' + formatTime(h.finished_at) + '</td>';
       html += '<td>' + shaCell + '</td>';
       const histTranscript = h.task_id
-        ? '<a class="btn btn-sm" href="/viewer/?id=' + encodeURIComponent(h.task_id) + '&view=tree&transcript=latest" target="_blank">Transcript</a>'
+        ? '<button class="btn btn-sm" onclick="showLatestTranscript(\'' + escHtml(h.task_id) + '\')">Transcript</button>'
         : '';
       html += '<td style="display:flex; gap:4px; flex-wrap:wrap"><button class="btn btn-sm" onclick="viewLogs(\'' + escHtml(h.slot_id) + '\')">Stdout</button>' + histTranscript + '</td>';
       html += '</tr>';
@@ -1391,7 +1396,9 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             rendered = SUPERVISOR_HTML \
                 .replace('{{PAGE_TITLE}}', html.escape(self.page_title)) \
                 .replace('{{HEADER_BG}}', self.header_bg) \
-                .replace('{{GITHUB_REPO_URL}}', self.github_repo_url)
+                .replace('{{GITHUB_REPO_URL}}', self.github_repo_url) \
+                .replace('{{SHARED_MODAL_CSS}}', SHARED_MODAL_CSS) \
+                .replace('{{SHARED_MODAL_JS}}', SHARED_MODAL_JS)
             self._respond(200, rendered, 'text/html')
 
         elif path == '/favicon.svg':
@@ -1423,15 +1430,13 @@ class SupervisorHandler(BaseHTTPRequestHandler):
                 .replace('{{PAGE_TITLE}}', html.escape(self.viewer_page_title)) \
                 .replace('{{HEADER_BG}}', self.viewer_header_bg) \
                 .replace('{{GITHUB_REPO_URL}}', self.github_repo_url) \
+                .replace('{{SHARED_MODAL_CSS}}', SHARED_MODAL_CSS) \
+                .replace('{{SHARED_MODAL_JS}}', SHARED_MODAL_JS) \
                 .replace("href=\"/favicon.svg\"", "href=\"/viewer/favicon.svg\"") \
                 .replace("fetch('/api/tasks')", "fetch('/viewer/api/tasks')") \
-                .replace("fetch('/api/transcript-messages/'", "fetch('/viewer/api/transcript-messages/'") \
-                .replace("fetch(`/api/transcript-messages/", "fetch(`/viewer/api/transcript-messages/") \
                 .replace("fetch('/api/loop-log/'", "fetch('/viewer/api/loop-log/'") \
-                .replace("fetch('/api/diff/'", "fetch('/viewer/api/diff/'") \
                 .replace("fetch('/api/diff-stat/'", "fetch('/viewer/api/diff-stat/'") \
-                .replace("fetch(`/api/transcript-raw/", "fetch(`/viewer/api/transcript-raw/") \
-                .replace("fetch(`/api/transcript-timeline/", "fetch(`/viewer/api/transcript-timeline/")
+                .replace("window._modalApiBase = ''", "window._modalApiBase = '/viewer'")
             # Inject a nav link back to the supervisor
             rendered = rendered.replace(
                 '<span id="supervisor-link-slot"></span>',
