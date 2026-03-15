@@ -1149,18 +1149,66 @@ async function showLoopLog(taskId) {
     const res = await fetch('/api/loop-log/' + taskId);
     if (!res.ok) return;
     const text = await res.text();
+    const lines = text.split('\n');
+    const linesHtml = lines.map(l => `<div class="log-line">${esc(l)}</div>`).join('');
     const overlay = document.createElement('div');
     overlay.className = 'log-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     overlay.innerHTML = `<div class="log-panel">
       <div class="log-panel-header">
         <h3>Loop Log — ${taskId.slice(0,8)}</h3>
-        <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
+        <div class="log-panel-header-actions">
+          <button class="log-copy-btn" onclick="copyLoopLog(this)">Copy All</button>
+          <button class="log-panel-close" onclick="this.closest('.log-overlay').remove()">✕</button>
+        </div>
       </div>
-      <div class="log-panel-body">${esc(text)}</div>
+      <div class="log-panel-body log-lines-body">${linesHtml}</div>
     </div>`;
+    overlay._rawText = text;
+    // Click lines to select/deselect for partial copy
+    overlay.querySelectorAll('.log-line').forEach(el => {
+      el.addEventListener('click', (e) => {
+        if (e.shiftKey && overlay._lastClickedLine != null) {
+          const allLines = [...overlay.querySelectorAll('.log-line')];
+          const curIdx = allLines.indexOf(el);
+          const lastIdx = overlay._lastClickedLine;
+          const [lo, hi] = curIdx < lastIdx ? [curIdx, lastIdx] : [lastIdx, curIdx];
+          allLines.forEach((l, i) => {
+            if (i >= lo && i <= hi) l.classList.add('selected');
+          });
+        } else if (e.metaKey || e.ctrlKey) {
+          el.classList.toggle('selected');
+        } else {
+          const wasSelected = el.classList.contains('selected');
+          overlay.querySelectorAll('.log-line.selected').forEach(l => l.classList.remove('selected'));
+          if (!wasSelected) el.classList.add('selected');
+        }
+        overlay._lastClickedLine = [...overlay.querySelectorAll('.log-line')].indexOf(el);
+        // Update copy button label
+        const selCount = overlay.querySelectorAll('.log-line.selected').length;
+        const btn = overlay.querySelector('.log-copy-btn');
+        btn.textContent = selCount > 0 ? `Copy ${selCount} Line${selCount > 1 ? 's' : ''}` : 'Copy All';
+      });
+    });
     document.body.appendChild(overlay);
   } catch (_) {}
+}
+
+function copyLoopLog(btn) {
+  const overlay = btn.closest('.log-overlay');
+  const selected = overlay.querySelectorAll('.log-line.selected');
+  let textToCopy;
+  if (selected.length > 0) {
+    textToCopy = [...selected].map(el => el.textContent).join('\n');
+  } else {
+    textToCopy = overlay._rawText;
+  }
+  navigator.clipboard.writeText(textToCopy).then(() => {
+    const prev = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+  });
 }
 
 function renderEventTimeline(events) {
