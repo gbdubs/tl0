@@ -6,18 +6,47 @@ tl0 manages a DAG of tasks stored as git-backed JSON files. Multiple agents can 
 
 ## Install
 
+### Prerequisites
+
+- **Python 3.10+** — check with `python3 --version`
+- **Git** — tl0 uses git for task storage and worktree-based parallel execution
+- **Claude Code** — for running AI agent task loops (optional if just managing tasks manually)
+
+### Fresh machine setup
+
 ```bash
+# 1. Clone the repo
+git clone <repo-url> ~/gbdubs/tl0
+cd ~/gbdubs/tl0
+
+# 2. Install in editable mode (changes to source take effect immediately)
 python3 -m pip install -e .
+
+# 3. Add the Python scripts directory to your PATH.
+#    pip will warn you if it's not already there — use the path from that warning.
+#    On macOS with python.org Python, it's typically:
+echo 'export PATH="/Library/Frameworks/Python.framework/Versions/3.13/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# 4. Verify
+tl0h --help
+tl0m --help
 ```
 
-After installing, ensure the Python scripts directory is on your PATH. If you see a warning like _"The scripts tl0h and tl0m are installed in '...' which is not on PATH"_, add the listed directory:
+> **Note:** The editable install (`-e`) means the installed `tl0h` and `tl0m` commands always point back to your local clone. No need to reinstall after pulling changes — just `git pull` and you're up to date.
+
+### Alternate: standalone scripts
+
+If you don't want to pip-install, the repo includes shell wrappers that set `PYTHONPATH` and invoke the CLIs directly:
 
 ```bash
-# Add to your ~/.zshrc (or ~/.bashrc):
-export PATH="/Library/Frameworks/Python.framework/Versions/3.13/bin:$PATH"
-```
+./tl0h.sh --help
+./tl0m.sh --help
 
-Then restart your shell or run `source ~/.zshrc`.
+# Or symlink them somewhere on your PATH:
+ln -s ~/gbdubs/tl0/tl0h.sh /usr/local/bin/tl0h
+ln -s ~/gbdubs/tl0/tl0m.sh /usr/local/bin/tl0m
+```
 
 ## CLIs
 
