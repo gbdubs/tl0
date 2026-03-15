@@ -44,7 +44,7 @@ OPTIONAL_FIELDS = {
     "model", "thinking",
     "design_references", "produces", "context_files",
     "result", "created_by", "merge_sha",
-    "failure_reason",
+    "failure_reason", "executor", "merge_attempt_count",
 }
 
 ALL_FIELDS = REQUIRED_FIELDS | OPTIONAL_FIELDS

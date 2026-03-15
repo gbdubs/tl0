@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--design-refs", default="", help="Comma-separated file:section:note")
     parser.add_argument("--produces", default="", help="Comma-separated file paths")
     parser.add_argument("--context-files", default="", help="Comma-separated file paths")
+    parser.add_argument("--executor", default=None, help="Shell command to run instead of Claude (for script-based tasks)")
     parser.add_argument("--parent", default=None, help="Creator task UUID (prefix OK). Also auto-detected from TL0_TASK_ID env var.")
 
     args = parser.parse_args(argv)
@@ -68,6 +69,7 @@ def main(argv: list[str] | None = None):
         "context_files": [x.strip() for x in args.context_files.split(",") if x.strip()],
         "result": None,
         "created_by": created_by,
+        "executor": args.executor,
     }
 
     save_task(task)
