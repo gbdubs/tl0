@@ -106,6 +106,15 @@
     "merge_sha": {
       "type": ["string", "null"],
       "description": "Git SHA of the squash-merge commit on main. Set after successful merge+push."
+    },
+    "executor": {
+      "type": ["string", "null"],
+      "description": "Shell command to run instead of Claude. Runs in the worktree with TL0_TASK_ID, TL0_WORKTREE_ROOT, TL0_MAIN_REPO, AGENT_ID set. Null/absent = default Claude execution."
+    },
+    "merge_attempt_count": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Number of times a script task has been retried due to merge conflicts. After 5 failed attempts, the task is marked permanently failed."
     }
   },
   "additionalProperties": false

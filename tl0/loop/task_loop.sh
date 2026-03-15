@@ -267,6 +267,38 @@ run_claude() {
   return $claude_exit
 }
 
+# Run a script executor with logging. Usage:
+#   run_script <worktree> <executor_cmd>
+# The script receives task context via environment variables (TL0_TASK_ID,
+# TL0_WORKTREE_ROOT, TL0_MAIN_REPO, AGENT_ID) which are already exported.
+# Sets SCRIPT_OUTPUT and returns the script's exit code.
+run_script() {
+  local worktree="$1"
+  local executor_cmd="$2"
+
+  CLAUDE_CALL_SEQ=$((CLAUDE_CALL_SEQ + 1))
+  local seq
+  seq=$(printf "%02d" "$CLAUDE_CALL_SEQ")
+  local log_file="$TASK_TRANSCRIPT_DIR/${seq}-script.log"
+
+  log "    Running script executor [$seq]..."
+  log "    Command: $executor_cmd"
+
+  local script_exit=0
+  SCRIPT_OUTPUT=""
+  SCRIPT_OUTPUT=$(cd "$worktree" && eval "$executor_cmd" 2>&1 \
+    | tee "$log_file"
+  ) || script_exit=$?
+
+  if [ $script_exit -ne 0 ]; then
+    warn "Script executor [$seq] exited with code $script_exit."
+  fi
+
+  log "    Script log [$seq] saved ($(wc -l < "$log_file" | tr -d ' ') lines)"
+
+  return $script_exit
+}
+
 # Check a transcript file for quota rejection.
 # Outputs the resetsAt timestamp if rejected, empty otherwise.
 # Returns 0 if quota was rejected, 1 if not.
@@ -457,9 +489,16 @@ merge_main_into_branch() {
   local short_id="$2"
   local model="$3"
   local label="${4:-}"
+  local use_claude="${5:-true}"
 
   if git -C "$worktree" merge --quiet origin/main -m "Merge main into task/$short_id${label:+ ($label)}" 2>/dev/null; then
     return 0
+  fi
+
+  if [[ "$use_claude" != "true" ]]; then
+    warn "Merge conflict in script task. Cannot auto-resolve (no Claude). Aborting merge."
+    git -C "$worktree" merge --abort 2>/dev/null || true
+    return 1
   fi
 
   log "    Merge conflict detected. Asking claude to resolve..."
@@ -520,6 +559,7 @@ merge_and_push() {
   local branch="$3"
   local model="$4"
   local commit_msg="$5"
+  local use_claude="${6:-true}"
 
   local max_attempts=20
   local pushed=false
@@ -557,7 +597,7 @@ merge_and_push() {
         git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
         git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-        if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt"; then
+        if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt" "$use_claude"; then
           warn "Could not merge main into task branch after pre-commit failure. Aborting retries."
           break
         fi
@@ -600,7 +640,7 @@ merge_and_push() {
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
-    if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt"; then
+    if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt" "$use_claude"; then
       warn "Could not merge main into task branch on attempt $attempt. Aborting retries."
       break
     fi
@@ -684,6 +724,7 @@ run_task() {
   thinking=$(echo "$task_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('thinking') or False)")
   title=$(echo "$task_json"       | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['title'][:60])")
   description=$(echo "$task_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('description', ''))")
+  executor=$(echo "$task_json"    | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('executor') or '')")
   task_start_time=$(date +%s)
   short_id="${task_id:0:8}"
   branch="task/$short_id"
@@ -776,13 +817,24 @@ run_task() {
     # Clear any previous failure counter on success.
     rm -f "/tmp/tl0-wt-fail-${short_id}"
 
-    # --- Run claude ---
-    # Export worktree path so the agent can self-check its working directory.
+    # Export worktree path so the agent/script can access its working directory.
     export TL0_WORKTREE_ROOT="$worktree"
     export TL0_MAIN_REPO="$CODE_REPO"
 
-    local prompt
-    prompt="IMPORTANT — WORKTREE PATH CHECK
+    local claude_exit=0
+    local claude_stdout=""
+
+    if [[ -n "$executor" ]]; then
+      # --- Run script executor ---
+      write_status "executing" "$task_id" "$title"
+      local script_exit=0
+      run_script "$worktree" "$executor" || script_exit=$?
+      claude_stdout="$SCRIPT_OUTPUT"
+      TASK_SESSION_ID=""
+    else
+      # --- Run claude ---
+      local prompt
+      prompt="IMPORTANT — WORKTREE PATH CHECK
 You are running in a git worktree. Your working directory is:
   $worktree
 The main repository at $CODE_REPO is OFF LIMITS — other agents may be modifying it concurrently.
@@ -795,34 +847,31 @@ AGENT_ID=$AGENT_ID
 
 Use 'tl0m' for all task operations (create subtasks, mark done, etc.)."
 
-    local claude_exit=0
-    local claude_stdout=""
+      write_status "executing" "$task_id" "$title"
+      run_claude "execute" "$worktree" "$model" "$prompt" || claude_exit=$?
 
-    write_status "executing" "$task_id" "$title"
-    run_claude "execute" "$worktree" "$model" "$prompt" || claude_exit=$?
+      # --- Check for quota rejection ---
+      local transcript_file="$TASK_TRANSCRIPT_DIR/01-execute.jsonl"
+      write_quota_info "$transcript_file"
 
-    # --- Check for quota rejection ---
-    local transcript_file="$TASK_TRANSCRIPT_DIR/01-execute.jsonl"
-    write_quota_info "$transcript_file"
-
-    local resets_at=""
-    if resets_at=$(check_quota_rejected "$transcript_file"); then
-      warn "Quota/rate-limit rejection detected. Freeing task."
-      if [[ -n "$resets_at" ]]; then
-        local reset_time
-        reset_time=$(date -r "$resets_at" "+%H:%M %Z" 2>/dev/null || echo "unknown")
-        log "    Quota resets at: $reset_time (ts=$resets_at)"
+      local resets_at=""
+      if resets_at=$(check_quota_rejected "$transcript_file"); then
+        warn "Quota/rate-limit rejection detected. Freeing task."
+        if [[ -n "$resets_at" ]]; then
+          local reset_time
+          reset_time=$(date -r "$resets_at" "+%H:%M %Z" 2>/dev/null || echo "unknown")
+          log "    Quota resets at: $reset_time (ts=$resets_at)"
+        fi
+        write_status "quota_rejected" "$task_id" "$title"
+        tl0m free 2>/dev/null || true
+        cleanup_worktree "$short_id"
+        TASK_TRANSCRIPT_DIR=""
+        TASK_SESSION_ID=""
+        return 2  # special exit: quota rejected
       fi
-      write_status "quota_rejected" "$task_id" "$title"
-      tl0m free 2>/dev/null || true
-      cleanup_worktree "$short_id"
-      TASK_TRANSCRIPT_DIR=""
-      TASK_SESSION_ID=""
-      return 2  # special exit: quota rejected
-    fi
 
-    # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
-    TASK_SESSION_ID=$(python3 -c "
+      # Extract session ID from transcript for use in follow-up calls (e.g. merge conflict resolution).
+      TASK_SESSION_ID=$(python3 -c "
 import json, sys
 for line in open('$transcript_file'):
     line = line.strip()
@@ -836,13 +885,13 @@ for line in open('$transcript_file'):
         print(sid)
         sys.exit(0)
 " 2>/dev/null || true)
-    if [[ -n "$TASK_SESSION_ID" ]]; then
-      log "    Session ID: $TASK_SESSION_ID"
-    fi
+      if [[ -n "$TASK_SESSION_ID" ]]; then
+        log "    Session ID: $TASK_SESSION_ID"
+      fi
 
-    # Extract final text result from the stream-json transcript.
-    # Skip results where is_error is true (e.g. quota errors, API failures).
-    claude_stdout=$(python3 -c "
+      # Extract final text result from the stream-json transcript.
+      # Skip results where is_error is true (e.g. quota errors, API failures).
+      claude_stdout=$(python3 -c "
 import json, sys
 text_parts = []
 for line in open('$transcript_file'):
@@ -866,6 +915,24 @@ for line in open('$transcript_file'):
 if text_parts:
     print(text_parts[-1])
 " 2>/dev/null || true)
+    fi
+  fi
+
+  # --- Script executor non-zero exit → immediate failure (no retries) ---
+  if [[ -n "$executor" ]] && [ "${script_exit:-0}" -ne 0 ]; then
+    local fail_msg="Script executor exited with code $script_exit"
+    if [ -f "$worktree/.task-failed.txt" ]; then
+      fail_msg=$(cat "$worktree/.task-failed.txt")
+    fi
+    log "    $fail_msg"
+    write_status "failed" "$task_id" "$title"
+    tl0m fail --reason "$fail_msg" 2>/dev/null \
+      || warn "Failed to mark task as failed. May need manual intervention."
+    cleanup_worktree "$short_id"
+    log "Task $short_id failed (script error). Transcripts in $TASK_TRANSCRIPT_DIR/"
+    TASK_TRANSCRIPT_DIR=""
+    TASK_SESSION_ID=""
+    return 0
   fi
 
   # --- Check for explicit failure signal ---
@@ -943,7 +1010,31 @@ if text_parts:
   # merge_and_push's staging area in the shared CODE_REPO.
   git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
 
-  if ! merge_main_into_branch "$worktree" "$short_id" "$model"; then
+  local use_claude="true"
+  [[ -n "$executor" ]] && use_claude="false"
+
+  if ! merge_main_into_branch "$worktree" "$short_id" "$model" "" "$use_claude"; then
+    if [[ -n "$executor" ]]; then
+      # Script task: increment merge_attempt_count, free for retry or fail permanently
+      local attempt_count
+      attempt_count=$(tl0m show "$task_id" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('merge_attempt_count') or 0)" 2>/dev/null || echo 0)
+      attempt_count=$((attempt_count + 1))
+      tl0m update "$task_id" --merge-attempt-count "$attempt_count" 2>/dev/null || true
+      if [ "$attempt_count" -ge 5 ]; then
+        warn "Script task merge failed $attempt_count times. Marking permanently failed."
+        write_status "failed" "$task_id" "$title"
+        git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
+        tl0m fail --reason "Merge conflict after $attempt_count attempts (branch: $branch)" 2>/dev/null || true
+        TASK_TRANSCRIPT_DIR=""
+        return 0
+      else
+        warn "Script task merge conflict (attempt $attempt_count/5). Freeing for retry."
+        cleanup_worktree "$short_id"
+        tl0m free 2>/dev/null || true
+        TASK_TRANSCRIPT_DIR=""
+        return 0
+      fi
+    fi
     warn "Failed to merge main into task branch. Preserving work."
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge conflict with main"
@@ -980,14 +1071,35 @@ if text_parts:
 
   # --- Squash-merge task branch into main and push ---
   MERGE_AND_PUSH_SHA=""
-  if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg"; then
-    warn "Failed to merge and push task branch. Preserving work."
+  if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg" "$use_claude"; then
     git -C "$CODE_REPO" merge --abort 2>/dev/null || true
     git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+    if [[ -n "$executor" ]]; then
+      # Script task: increment merge_attempt_count, free for retry or fail permanently
+      local attempt_count
+      attempt_count=$(tl0m show "$task_id" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('merge_attempt_count') or 0)" 2>/dev/null || echo 0)
+      attempt_count=$((attempt_count + 1))
+      tl0m update "$task_id" --merge-attempt-count "$attempt_count" 2>/dev/null || true
+      if [ "$attempt_count" -ge 5 ]; then
+        warn "Script task merge/push failed $attempt_count times. Marking permanently failed."
+        write_status "failed" "$task_id" "$title"
+        git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
+        tl0m fail --reason "Merge/push failed after $attempt_count attempts (branch: $branch)" 2>/dev/null || true
+        TASK_TRANSCRIPT_DIR=""
+        return 0
+      else
+        warn "Script task merge/push failed (attempt $attempt_count/5). Freeing for retry."
+        cleanup_worktree "$short_id"
+        tl0m free 2>/dev/null || true
+        TASK_TRANSCRIPT_DIR=""
+        return 0
+      fi
+    fi
+    warn "Failed to merge and push task branch. Preserving work."
     git -C "$CODE_REPO" push origin "$branch" 2>/dev/null || true
     print_resume_instructions "$task_id" "$short_id" "$branch" "Merge/push to main failed"
     tl0m free 2>/dev/null || true

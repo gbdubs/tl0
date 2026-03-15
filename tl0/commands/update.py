@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--add-blocked-by", default="", help="Comma-separated task UUIDs to add as blockers")
     parser.add_argument("--remove-blocked-by", default="", help="Comma-separated task UUIDs to remove as blockers")
     parser.add_argument("--result", help="Set result text (use 'done' command for lifecycle transitions)")
+    parser.add_argument("--merge-attempt-count", type=int, default=None, help="Set merge attempt counter (for script task retries)")
     args = parser.parse_args(argv)
 
     # Resolve prefix
@@ -48,6 +49,9 @@ def main(argv: list[str] | None = None):
         changed = True
     if args.result is not None:
         task["result"] = args.result
+        changed = True
+    if args.merge_attempt_count is not None:
+        task["merge_attempt_count"] = args.merge_attempt_count
         changed = True
 
     if args.add_tags:
