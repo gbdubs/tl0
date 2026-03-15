@@ -105,6 +105,9 @@ def main():
     # validate
     sub.add_parser("validate", help="Validate all tasks and report errors")
 
+    # delete
+    sub.add_parser("delete", help="Delete a task and clean up references")
+
     # reset
     sub.add_parser("reset", help="Delete all tasks (destructive)")
 
@@ -184,6 +187,10 @@ def main():
 
     elif cmd in ("validate",):
         from tl0.commands.validate import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("delete",):
+        from tl0.commands.delete import main as cmd_main
         cmd_main(remaining)
 
     elif cmd in ("reset",):
