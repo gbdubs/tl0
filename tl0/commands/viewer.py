@@ -3673,7 +3673,8 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
         return []
 
     events = []
-    for line in filepath.read_text().splitlines():
+    raw_lines = filepath.read_text().splitlines()
+    for line in raw_lines:
         line = line.strip()
         if not line:
             continue
@@ -3681,6 +3682,16 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
             events.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+
+    # Extract total duration from result event for timestamp estimation.
+    # Since the JSONL file is written progressively in real-time, we use each
+    # event's position (index / total) * duration_ms as an approximate timestamp.
+    total_events = len(events)
+    duration_ms = 0
+    for e in reversed(events):
+        if e.get("type") == "result":
+            duration_ms = e.get("duration_ms", 0)
+            break
 
     # Extract cwd from init event
     cwd = ""
@@ -3697,7 +3708,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
     messages = []
     seen_assistant_ids: set[str] = set()
 
-    for e in events:
+    for evt_idx, e in enumerate(events):
         if e.get("type") == "assistant":
             msg = e.get("message", {})
             content = msg.get("content", [])
@@ -3708,6 +3719,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].get("_msg_id") == msg_id:
                         merged = messages[i]["content"]
+                        messages[i]["_evt_idx"] = evt_idx  # update to latest
                         for block in content:
                             if not isinstance(block, dict):
                                 continue
@@ -3735,7 +3747,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
             else:
                 if msg_id:
                     seen_assistant_ids.add(msg_id)
-                messages.append({"role": "assistant", "content": list(content), "_msg_id": msg_id})
+                messages.append({"role": "assistant", "content": list(content), "_msg_id": msg_id, "_evt_idx": evt_idx})
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tool_uses[block.get("id", "")] = {
@@ -3747,7 +3759,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
             content = msg.get("content", [])
             if isinstance(content, str):
                 if content.strip():
-                    messages.append({"role": "user", "text": content})
+                    messages.append({"role": "user", "text": content, "_evt_idx": evt_idx})
                 continue
             if not isinstance(content, list):
                 continue
@@ -3764,7 +3776,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                         text_parts.append(block.get("text", ""))
                 combined = "\n".join(text_parts)
                 if combined.strip():
-                    messages.append({"role": "user", "text": combined})
+                    messages.append({"role": "user", "text": combined, "_evt_idx": evt_idx})
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     tuid = block.get("tool_use_id", "")
@@ -3797,7 +3809,15 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
         "TodoWrite": "\U0001f4cb", # 📋
     }
 
+    def _evt_timestamp_ms(evt_idx: int) -> int:
+        """Estimate timestamp in ms based on event position within the file."""
+        if total_events <= 1 or duration_ms <= 0:
+            return 0
+        return int(evt_idx / (total_events - 1) * duration_ms)
+
     for msg in messages:
+        msg_evt_idx = msg.get("_evt_idx", 0)
+
         if msg.get("role") == "user":
             text = msg.get("text", "")
             first_line = text.split("\n")[0][:120]
@@ -3810,6 +3830,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                 "is_error": False,
                 "detail_input": "",
                 "detail_output": text[:5000] if len(text) > 120 else "",
+                "timestamp_ms": _evt_timestamp_ms(msg_evt_idx),
             })
             continue
 
@@ -3833,6 +3854,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                     "is_error": False,
                     "detail_input": "",
                     "detail_output": thinking_text[:5000],
+                    "timestamp_ms": _evt_timestamp_ms(msg_evt_idx),
                 })
 
             elif bt == "text":
@@ -3849,6 +3871,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                     "is_error": False,
                     "detail_input": "",
                     "detail_output": text[:5000] if len(text) > 120 else "",
+                    "timestamp_ms": _evt_timestamp_ms(msg_evt_idx),
                 })
 
             elif bt == "tool_use":
@@ -3950,6 +3973,7 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
                     "is_error": is_error,
                     "detail_input": detail_input,
                     "detail_output": detail_output,
+                    "timestamp_ms": _evt_timestamp_ms(msg_evt_idx),
                 })
 
     return timeline
