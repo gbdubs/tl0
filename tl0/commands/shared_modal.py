@@ -23,11 +23,29 @@ SHARED_MODAL_CSS = r"""
   cursor: pointer; padding: 4px 8px; border-radius: 4px;
 }
 .log-panel-close:hover { background: #333; color: white; }
+.log-panel-header-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.log-copy-btn {
+  background: #2d2d2d; border: 1px solid #555; color: #d4d4d4; font-size: 12px;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit;
+  transition: background 0.15s, border-color 0.15s;
+}
+.log-copy-btn:hover { background: #3a3a3a; border-color: #777; color: white; }
+.log-copy-btn.copied { background: #166534; border-color: #22c55e; color: #bbf7d0; }
 .log-panel-body {
   flex: 1; overflow: auto; padding: 12px 16px;
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px;
   line-height: 1.6; white-space: pre-wrap; word-break: break-all;
 }
+.log-panel-body.log-lines-body { padding: 0; }
+.log-line {
+  padding: 1px 16px; cursor: pointer; border-left: 3px solid transparent;
+  white-space: pre-wrap; word-break: break-all;
+}
+.log-line:hover { background: #2a2a2a; }
+.log-line.selected { background: #1e3a5f; border-left-color: #3b82f6; }
+.log-line::selection, .log-line *::selection { background: #264f78; }
 
 /* ── Diff viewer ──────────────────────────────────────────── */
 .diff-panel {
