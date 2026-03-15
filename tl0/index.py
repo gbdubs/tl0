@@ -89,6 +89,7 @@ class Index:
         self._conn = sqlite3.connect(
             str(self._db_path),
             check_same_thread=False,
+            timeout=60,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
@@ -128,6 +129,7 @@ class Index:
 
         # Disk state
         disk_ids = set()
+        batch_count = 0
         for p in self._tasks_folder.glob("*.json"):
             task_id = p.stem
             disk_ids.add(task_id)
@@ -139,6 +141,9 @@ class Index:
                 with open(p) as f:
                     task = json.load(f)
                 self._upsert_task(task, mtime)
+                batch_count += 1
+                if batch_count % 500 == 0:
+                    self._conn.commit()
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -169,6 +174,7 @@ class Index:
             stored[(row[0], row[1])] = row[2]
 
         disk_keys = set()
+        batch_count = 0
         for task_dir in self._transcripts_folder.iterdir():
             if not task_dir.is_dir():
                 continue
@@ -181,6 +187,9 @@ class Index:
                     continue
                 try:
                     self._upsert_transcript(task_id, jf, mtime)
+                    batch_count += 1
+                    if batch_count % 500 == 0:
+                        self._conn.commit()
                 except OSError:
                     continue
 

@@ -4014,14 +4014,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif path == '/api/tasks':
-            from tl0.common import _get_index
-            tasks = _get_index().get_all_tasks()
-            body  = json.dumps(tasks).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                from tl0.common import _get_index
+                tasks = _get_index().get_all_tasks()
+                body  = json.dumps(tasks).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err = json.dumps({"error": str(e)}).encode('utf-8')
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
 
         elif path.startswith('/api/loop-log/'):
             task_id = path.split('/')[-1]
@@ -4283,6 +4293,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):  # suppress access log noise
         pass
+
+    def log_error(self, fmt, *args):
+        import sys
+        sys.stderr.write(f"[viewer] {fmt % args}\n")
 
 
 def _find_free_port() -> int:
