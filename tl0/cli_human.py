@@ -132,6 +132,9 @@ def main():
     # reset-failed
     sub.add_parser("reset-failed", help="Reset failed tasks back to pending so they can be retried")
 
+    # archive
+    sub.add_parser("archive", help="Archive tasks to zip and reset tracking directory")
+
     # Parse just the command name, pass the rest through to subcommands
     args, remaining = parser.parse_known_args()
 
@@ -223,6 +226,10 @@ def main():
 
     elif cmd in ("index",):
         from tl0.commands.index_cmd import main as cmd_main
+        cmd_main(remaining)
+
+    elif cmd in ("archive",):
+        from tl0.commands.archive import main as cmd_main
         cmd_main(remaining)
 
     else:
