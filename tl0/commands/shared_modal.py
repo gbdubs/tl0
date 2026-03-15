@@ -270,6 +270,11 @@ SHARED_MODAL_CSS = r"""
   color: #9ca3af; font-size: 11px; flex-shrink: 0; white-space: nowrap;
 }
 .tl-meta.tl-meta-err { color: #dc2626; font-weight: 600; }
+.tl-time {
+  color: #9ca3af; font-size: 10px; flex-shrink: 0; white-space: nowrap;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  min-width: 36px; text-align: right;
+}
 .tl-row.tl-thinking { opacity: 0.55; }
 .tl-row.tl-thinking .tl-label { font-style: italic; }
 .tl-row.tl-text .tl-label { color: #1f2937; }
@@ -392,6 +397,14 @@ function toggleConvEl(id) {
   }
 }
 
+function _fmtTimestamp(ms) {
+  if (ms == null || ms < 0) return '';
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
 function renderTimeline(entries) {
   const _e = window._modalEsc;
   let html = '';
@@ -409,6 +422,9 @@ function renderTimeline(entries) {
     if (e.meta) {
       const metaCls = e.is_error ? 'tl-meta tl-meta-err' : 'tl-meta';
       html += `<span class="${metaCls}">${_e(e.meta)}</span>`;
+    }
+    if (e.timestamp_ms != null) {
+      html += `<span class="tl-time">${_fmtTimestamp(e.timestamp_ms)}</span>`;
     }
     html += `</div>`;
     if (hasDetail) {
