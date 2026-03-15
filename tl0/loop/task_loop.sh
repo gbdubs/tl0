@@ -588,6 +588,7 @@ merge_and_push() {
     git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
+      git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
       bump_meta_versions
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       local commit_stderr_1
@@ -659,6 +660,7 @@ merge_and_push() {
       continue
     fi
 
+    git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
     bump_meta_versions
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     local commit_stderr_2
