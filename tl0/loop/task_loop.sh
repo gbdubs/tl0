@@ -469,6 +469,29 @@ with open(p, 'w') as f:
   done <<< "$staged_xlsx"
 }
 
+delete_stale_executed_xlsx() {
+  # When generated.xlsx is staged (updated), the pre-commit hook requires
+  # that the corresponding executed.xlsx be deleted. executed.xlsx is produced
+  # by S4.5 (Excel evaluation) and becomes stale when generated.xlsx changes.
+  local staged_xlsx
+  staged_xlsx=$(git -C "$CODE_REPO" diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '^cases/.*/generated\.xlsx$' || true)
+
+  if [ -z "$staged_xlsx" ]; then
+    return 0
+  fi
+
+  while IFS= read -r xlsx_path; do
+    local case_dir
+    case_dir=$(dirname "$xlsx_path")
+    local exec_path="$CODE_REPO/$case_dir/executed.xlsx"
+
+    if [ -f "$exec_path" ]; then
+      git -C "$CODE_REPO" rm -f "$case_dir/executed.xlsx" 2>/dev/null || rm -f "$exec_path"
+      log "    Deleted stale $case_dir/executed.xlsx"
+    fi
+  done <<< "$staged_xlsx"
+}
+
 print_resume_instructions() {
   local task_id="$1"
   local short_id="$2"
@@ -590,6 +613,9 @@ merge_and_push() {
     return 1
   fi
 
+  local last_precommit_err=""
+  local same_err_count=0
+
   for attempt in $(seq 1 $max_attempts); do
     log "    Squash+push attempt $attempt/$max_attempts..."
 
@@ -603,11 +629,23 @@ merge_and_push() {
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
       git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
       bump_meta_versions
+      delete_stale_executed_xlsx
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       local commit_stderr_1
       if ! commit_stderr_1=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
         warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected. Merging main into task branch and retrying..."
         warn "Commit stderr: $commit_stderr_1"
+        # Bail early if the same pre-commit error repeats — it won't self-resolve
+        if [ "$commit_stderr_1" = "$last_precommit_err" ]; then
+          same_err_count=$((same_err_count + 1))
+          if [ "$same_err_count" -ge 3 ]; then
+            warn "Same pre-commit error repeated $same_err_count times. Giving up to release merge lock."
+            break
+          fi
+        else
+          last_precommit_err="$commit_stderr_1"
+          same_err_count=1
+        fi
         git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
         git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
 
@@ -675,11 +713,23 @@ merge_and_push() {
 
     git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
     bump_meta_versions
+    delete_stale_executed_xlsx
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     local commit_stderr_2
     if ! commit_stderr_2=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
       warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected. Retrying..."
       warn "Commit stderr: $commit_stderr_2"
+      # Bail early if the same pre-commit error repeats — it won't self-resolve
+      if [ "$commit_stderr_2" = "$last_precommit_err" ]; then
+        same_err_count=$((same_err_count + 1))
+        if [ "$same_err_count" -ge 3 ]; then
+          warn "Same pre-commit error repeated $same_err_count times. Giving up to release merge lock."
+          break
+        fi
+      else
+        last_precommit_err="$commit_stderr_2"
+        same_err_count=1
+      fi
       git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
       git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
       sleep $((1 + RANDOM % 3))
