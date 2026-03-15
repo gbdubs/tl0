@@ -1212,7 +1212,7 @@ function copyLoopLog(btn) {
 }
 
 function renderEventTimeline(events) {
-  const colorMap = {created:'#9ca3af', claimed:'#3b82f6', freed:'#fb923c', done:'#22c55e'};
+  const colorMap = {created:'#9ca3af', claimed:'#3b82f6', freed:'#fb923c', done:'#22c55e', failed:'#ef4444'};
   let html = '<div class="event-timeline">';
   const t0 = events.length ? new Date(events[0].at).getTime() : 0;
   events.forEach((e, i) => {
@@ -1817,6 +1817,9 @@ function renderDetail(id) {
   if (openBlockers.length > 0) {
     html += `<div class="stuck-banner" style="margin-top:10px;background:#fff7ed;border-color:#fb923c;color:#c2410c">⛔ Blocked by ${openBlockers.length} unfinished task${openBlockers.length > 1 ? 's' : ''}.</div>`;
   }
+  if (task.status === 'failed' && task.failure_reason) {
+    html += `<div class="stuck-banner" style="margin-top:10px;background:#fef2f2;border-color:#ef4444;color:#b91c1c">❌ Failed: ${esc(task.failure_reason)}</div>`;
+  }
   html += `</div>`;
 
   // Description
@@ -1854,7 +1857,7 @@ function renderDetail(id) {
   }
 
   // Execution summary (from index, no extra fetch needed)
-  if ((task.status === 'claimed' || task.status === 'done') && task.transcript && task.transcript.has_transcript) {
+  if ((task.status === 'claimed' || task.status === 'done' || task.status === 'failed') && task.transcript && task.transcript.has_transcript) {
     const taskEvents = task.events && task.events.length ? task.events : null;
     const tx = task.transcript;
     html += '<div class="d-section"><div class="d-label" onclick="toggleSection(this)"><span>Execution</span></div>';
