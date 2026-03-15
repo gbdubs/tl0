@@ -104,13 +104,26 @@ print('\n'.join(agents))
 AGENT_ID="$(_pick_bird_name)"
 
 # Resolve the transcripts directory from tl0's tasks dir
-TRANSCRIPTS_DIR=$(python3 -c "
-from tl0.common import TRANSCRIPTS_FOLDER
-print(TRANSCRIPTS_FOLDER)
-" 2>/dev/null) || {
-  echo "Error: could not resolve transcripts directory." >&2
-  EXPECTED_EXIT=true; exit 1
-}
+# Priority: TL0_TASKS_DIR env var > tl0.json tasks_dir > ~/tl0-tasks
+if [[ -n "${TL0_TASKS_DIR:-}" ]]; then
+  _tasks_dir="$TL0_TASKS_DIR"
+else
+  _tasks_dir=""
+  _search_dir="$(pwd)"
+  while [[ "$_search_dir" != "/" ]]; do
+    if [[ -f "$_search_dir/tl0.json" ]]; then
+      _tasks_dir=$(python3 -c "import json,os; print(os.path.expanduser(json.load(open('$_search_dir/tl0.json')).get('tasks_dir','')))" 2>/dev/null || true)
+      break
+    fi
+    _search_dir="$(dirname "$_search_dir")"
+  done
+  if [[ -z "$_tasks_dir" ]]; then
+    echo "Error: could not resolve tasks directory. Set TL0_TASKS_DIR or create tl0.json (tl0h init)." >&2
+    EXPECTED_EXIT=true; exit 1
+  fi
+fi
+TRANSCRIPTS_DIR="$_tasks_dir/transcripts"
+unset _tasks_dir _search_dir
 mkdir -p "$TRANSCRIPTS_DIR"
 
 # Resolve the execution prompt. Priority:
