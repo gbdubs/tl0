@@ -399,6 +399,15 @@ cleanup_worktree() {
 }
 
 pull_main() {
+  # Acquire the merge lock before touching the main branch.
+  # Without this, a concurrent merge_and_push (which holds the lock)
+  # can have its squash-merge commit destroyed by our reset --hard
+  # before it gets a chance to push.
+  if ! _acquire_merge_lock; then
+    warn "Could not acquire merge lock for pull_main after 120s. Skipping."
+    return 1
+  fi
+
   git -C "$CODE_REPO" merge --abort 2>/dev/null || true
   git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
   git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
@@ -408,6 +417,8 @@ pull_main() {
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
     git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
   fi
+
+  _release_merge_lock
 }
 
 reconcile_generated_files() {
