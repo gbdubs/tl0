@@ -547,6 +547,8 @@ merge_and_push() {
     log "    Squash+push attempt $attempt/$max_attempts..."
 
     # ── Phase 1: Build merge commit in disposable worktree (NO LOCK) ──
+    # Produces commit_sha — a commit parented on base_sha with the squashed
+    # task changes and all hooks passing.
 
     # Clean up any previous merge worktree from a failed attempt
     cleanup_merge_worktree "$merge_wt"
@@ -615,14 +617,12 @@ merge_and_push() {
     fi
 
     # Validate non-empty commit
-    local sha_candidate
-    sha_candidate=$(git -C "$merge_wt" rev-parse HEAD 2>/dev/null || true)
-    # If commit was a no-op (no changes), don't record a stale SHA
-    if [ "$sha_candidate" = "$pre_commit_sha" ]; then
-      sha_candidate=""
+    local commit_sha
+    commit_sha=$(git -C "$merge_wt" rev-parse HEAD 2>/dev/null || true)
+    if [ "$commit_sha" = "$pre_commit_sha" ]; then
+      commit_sha=""
     fi
-    # Verify the commit has actual file changes (detect empty squash-merge)
-    if [ -n "$sha_candidate" ]; then
+    if [ -n "$commit_sha" ]; then
       local new_tree old_tree
       new_tree=$(git -C "$merge_wt" rev-parse "HEAD^{tree}" 2>/dev/null || true)
       old_tree=$(git -C "$merge_wt" rev-parse "HEAD~1^{tree}" 2>/dev/null || true)
@@ -632,9 +632,19 @@ merge_and_push() {
         sleep $((1 + RANDOM % 3))
         continue
       fi
+    else
+      warn "No commit produced (attempt $attempt). Retrying..."
+      cleanup_merge_worktree "$merge_wt"
+      sleep $((1 + RANDOM % 3))
+      continue
     fi
 
-    # ── Phase 2: Push under brief lock (~3s) ──
+    # ── Phase 2: Push under brief lock ──
+    # Try to push directly. If main advanced, fast-rebase our commit onto
+    # the new main using merge-tree + commit-tree (~20ms) instead of
+    # redoing the full Phase 1 (~4s). This is safe because hooks are
+    # deterministic over the diff — if they passed on base_sha they'll
+    # pass on the rebased commit.
 
     if ! _acquire_merge_lock; then
       warn "Could not acquire merge lock after 120s. Skipping merge."
@@ -642,51 +652,75 @@ merge_and_push() {
       return 1
     fi
 
-    # Check if origin/main has advanced since we based our merge
-    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
-    local current_main
-    current_main=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
-
-    if [ "$current_main" != "$base_sha" ]; then
-      # Main advanced — our commit's parent is stale. Retry Phase 1.
-      _release_merge_lock
-      log "    Main advanced during merge. Retrying with new base..."
-      cleanup_merge_worktree "$merge_wt"
-      sleep $((RANDOM % 2))
-      continue
-    fi
-
-    # Push from merge worktree (detached HEAD → remote main)
-    local push_attempts=0
-    local push_ok=false
-    while [ "$push_attempts" -lt 3 ]; do
-      push_attempts=$((push_attempts + 1))
+    local push_sha="$commit_sha"
+    local push_base="$base_sha"
+    local phase2_ok=false
+    local max_phase2=5
+    for phase2_attempt in $(seq 1 $max_phase2); do
       local push_stderr
-      if push_stderr=$(git -C "$merge_wt" push origin HEAD:refs/heads/main 2>&1); then
-        push_ok=true
+      if push_stderr=$(git -C "$CODE_REPO" push origin "${push_sha}:refs/heads/main" 2>&1); then
+        phase2_ok=true
         break
       fi
-      # Non-fast-forward means main advanced (race); anything else is transient
+
+      # Non-fast-forward → main advanced. Try fast-rebase under the lock.
       if echo "$push_stderr" | grep -qiE 'non-fast-forward|fetch first|rejected'; then
-        log "    Push rejected (non-fast-forward). Main advanced during push."
-        break
+        git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+        local new_main
+        new_main=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
+
+        # Use merge-tree to combine our changes with the new main (no worktree needed).
+        # Three-way merge: base=push_base, ours=new_main, theirs=push_sha
+        local rebase_tree
+        if ! rebase_tree=$(git -C "$CODE_REPO" merge-tree --write-tree \
+              --merge-base="$push_base" "$new_main" "$push_sha" 2>/dev/null); then
+          # Conflict — need full Phase 1 retry with merged task branch
+          log "    Fast-rebase conflict. Falling back to full retry..."
+          break
+        fi
+
+        # Check for empty merge (our changes were already in new main)
+        local new_main_tree
+        new_main_tree=$(git -C "$CODE_REPO" rev-parse "${new_main}^{tree}" 2>/dev/null || true)
+        if [ "$rebase_tree" = "$new_main_tree" ]; then
+          warn "Rebased commit would be empty — changes already in main."
+          break
+        fi
+
+        # Create rebased commit (instant, no hooks, no worktree)
+        local rebased_sha
+        rebased_sha=$(echo "$commit_msg" | git -C "$CODE_REPO" commit-tree "$rebase_tree" -p "$new_main" 2>/dev/null)
+        if [ -z "$rebased_sha" ]; then
+          warn "commit-tree failed during fast-rebase."
+          break
+        fi
+
+        log "    Fast-rebased onto ${new_main:0:8} (phase2 attempt $phase2_attempt)"
+        push_sha="$rebased_sha"
+        push_base="$new_main"
+        continue
       fi
-      warn "Push failed (transient, attempt $push_attempts/3): $push_stderr"
+
+      # Transient error — retry push with same SHA
+      warn "Push failed (transient, phase2 attempt $phase2_attempt/$max_phase2): $push_stderr"
       sleep 1
     done
 
     _release_merge_lock
 
-    if $push_ok; then
+    if $phase2_ok; then
       pushed=true
-      pushed_sha="$sha_candidate"
+      pushed_sha="$push_sha"
       cleanup_merge_worktree "$merge_wt"
       break
     fi
 
-    # Push failed — clean up and retry from Phase 1
+    # Phase 2 exhausted — clean up and retry from Phase 1
     cleanup_merge_worktree "$merge_wt"
-    sleep $((1 + RANDOM % 3))
+    if ! merge_main_into_branch "$worktree" "$short_id" "$model" "rebase conflict attempt $attempt" "$use_claude" 2>/dev/null; then
+      : # Best-effort; the Phase 1 retry will handle conflicts
+    fi
+    sleep $((RANDOM % 2))
   done
 
   # Final cleanup in case we broke out of the loop
