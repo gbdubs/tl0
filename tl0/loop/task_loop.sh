@@ -434,75 +434,6 @@ reconcile_generated_files() {
   fi
 }
 
-bump_meta_versions() {
-  # Auto-increment version and updated_at in meta.json for any case
-  # whose generated.xlsx is staged. This prevents pre-commit hook failures
-  # when tasks modify generated.xlsx without bumping meta.json.
-  local staged_xlsx
-  staged_xlsx=$(git -C "$CODE_REPO" diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '^cases/.*/generated\.xlsx$' || true)
-
-  if [ -z "$staged_xlsx" ]; then
-    return 0
-  fi
-
-  local now
-  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-  while IFS= read -r xlsx_path; do
-    local case_dir
-    case_dir=$(dirname "$xlsx_path")
-    local meta_path="$CODE_REPO/$case_dir/meta.json"
-
-    if [ ! -f "$meta_path" ]; then
-      continue
-    fi
-
-    # Read the HEAD (main) version of meta.json to ensure we bump past it.
-    # If the task branch is behind main, the staged version may be stale;
-    # using max(staged, HEAD) + 1 guarantees a strictly higher version.
-    local head_version
-    head_version=$(git -C "$CODE_REPO" show HEAD:"$case_dir/meta.json" 2>/dev/null \
-      | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',0))" 2>/dev/null || echo 0)
-
-    python3 -c "
-import json, sys
-p, ts, hv = sys.argv[1], sys.argv[2], int(sys.argv[3])
-with open(p) as f:
-    d = json.load(f)
-d['version'] = max(d.get('version', 0), hv) + 1
-d['updated_at'] = ts
-with open(p, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\\n')
-" "$meta_path" "$now" "$head_version"
-
-    git -C "$CODE_REPO" add "$case_dir/meta.json" 2>/dev/null
-  done <<< "$staged_xlsx"
-}
-
-delete_stale_executed_xlsx() {
-  # When generated.xlsx is staged (updated), the pre-commit hook requires
-  # that the corresponding executed.xlsx be deleted. executed.xlsx is produced
-  # by S4.5 (Excel evaluation) and becomes stale when generated.xlsx changes.
-  local staged_xlsx
-  staged_xlsx=$(git -C "$CODE_REPO" diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '^cases/.*/generated\.xlsx$' || true)
-
-  if [ -z "$staged_xlsx" ]; then
-    return 0
-  fi
-
-  while IFS= read -r xlsx_path; do
-    local case_dir
-    case_dir=$(dirname "$xlsx_path")
-    local exec_path="$CODE_REPO/$case_dir/executed.xlsx"
-
-    if [ -f "$exec_path" ]; then
-      git -C "$CODE_REPO" rm -f "$case_dir/executed.xlsx" 2>/dev/null || rm -f "$exec_path"
-      log "    Deleted stale $case_dir/executed.xlsx"
-    fi
-  done <<< "$staged_xlsx"
-}
-
 print_resume_instructions() {
   local task_id="$1"
   local short_id="$2"
@@ -639,8 +570,6 @@ merge_and_push() {
 
     if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
       git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
-      bump_meta_versions
-      delete_stale_executed_xlsx
       pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
       local commit_stderr_1
       if ! commit_stderr_1=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
@@ -723,8 +652,6 @@ merge_and_push() {
     fi
 
     git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
-    bump_meta_versions
-    delete_stale_executed_xlsx
     pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
     local commit_stderr_2
     if ! commit_stderr_2=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
