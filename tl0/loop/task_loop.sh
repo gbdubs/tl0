@@ -35,6 +35,11 @@ set -euo pipefail
 EXPECTED_EXIT=false
 alert_on_exit() {
   local exit_code=$?
+  # Clean up merge worktrees left by this process (PID-suffixed)
+  for mwt in "$WORKTREE_BASE"/merge-*-$$; do
+    [ -d "$mwt" ] && git -C "$CODE_REPO" worktree remove --force "$mwt" 2>/dev/null || true
+  done
+  git -C "$CODE_REPO" worktree prune 2>/dev/null || true
   # Clean up supervisor status file if running under supervisor
   [[ -n "${TL0_LOOP_STATUS_FILE:-}" ]] && rm -f "$TL0_LOOP_STATUS_FILE" 2>/dev/null || true
   if ! $EXPECTED_EXIT; then
@@ -398,27 +403,18 @@ cleanup_worktree() {
   git -C "$CODE_REPO" branch -D "$branch" 2>/dev/null || true
 }
 
+cleanup_merge_worktree() {
+  local merge_wt="$1"
+  if [ -d "$merge_wt" ]; then
+    git -C "$CODE_REPO" worktree remove --force "$merge_wt" 2>/dev/null || true
+  fi
+  git -C "$CODE_REPO" worktree prune 2>/dev/null || true
+}
+
 pull_main() {
-  # Acquire the merge lock before touching the main branch.
-  # Without this, a concurrent merge_and_push (which holds the lock)
-  # can have its squash-merge commit destroyed by our reset --hard
-  # before it gets a chance to push.
-  if ! _acquire_merge_lock; then
-    warn "Could not acquire merge lock for pull_main after 120s. Skipping."
-    return 1
-  fi
-
-  git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-  git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
-  git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
-
-  if ! git -C "$CODE_REPO" pull --ff-only --quiet origin main 2>/dev/null; then
-    warn "Fast-forward pull of main failed. Resetting to origin/main..."
-    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-  fi
-
-  _release_merge_lock
+  # Just fetch — merge_and_push no longer operates on CODE_REPO's working
+  # directory, so there's no shared state to protect with a lock.
+  git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
 }
 
 reconcile_generated_files() {
@@ -542,18 +538,7 @@ merge_and_push() {
   local max_attempts=20
   local pushed=false
   local pushed_sha=""
-  local sha_candidate pre_commit_sha
-
-  # Acquire an exclusive lock so only one task loop at a time can
-  # operate on CODE_REPO's main branch.  Without this, concurrent loops
-  # trample each other's staging area (git reset --hard from one loop
-  # destroys another's squash-merge), causing:
-  #   1. Task code changes silently lost (never pushed)
-  #   2. Wrong merge_sha captured (stale HEAD from another loop's reset)
-  if ! _acquire_merge_lock; then
-    warn "Could not acquire merge lock after 120s. Skipping merge."
-    return 1
-  fi
+  local merge_wt="$WORKTREE_BASE/merge-${short_id}-$$"
 
   local last_precommit_err=""
   local same_err_count=0
@@ -561,155 +546,153 @@ merge_and_push() {
   for attempt in $(seq 1 $max_attempts); do
     log "    Squash+push attempt $attempt/$max_attempts..."
 
-    git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-    git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
-    git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
+    # ── Phase 1: Build merge commit in disposable worktree (NO LOCK) ──
+
+    # Clean up any previous merge worktree from a failed attempt
+    cleanup_merge_worktree "$merge_wt"
+
+    # Fetch latest main and record the base SHA
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+    local base_sha
+    base_sha=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
 
-    if git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
-      git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
-      pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-      local commit_stderr_1
-      if ! commit_stderr_1=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
-        warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected. Merging main into task branch and retrying..."
-        warn "Commit stderr: $commit_stderr_1"
-        # Bail early if the same pre-commit error repeats — it won't self-resolve
-        if [ "$commit_stderr_1" = "$last_precommit_err" ]; then
-          same_err_count=$((same_err_count + 1))
-          if [ "$same_err_count" -ge 3 ]; then
-            warn "Same pre-commit error repeated $same_err_count times. Giving up to release merge lock."
-            break
-          fi
-        else
-          last_precommit_err="$commit_stderr_1"
-          same_err_count=1
-        fi
-        git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-        git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-
-        if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt" "$use_claude"; then
-          warn "Could not merge main into task branch after pre-commit failure. Aborting retries."
-          break
-        fi
-        reconcile_generated_files "$worktree"
-        sleep $((1 + RANDOM % 3))
-        continue
-      fi
-      sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-      # If commit was a no-op (no changes), don't record a stale SHA
-      if [ "$sha_candidate" = "$pre_commit_sha" ]; then
-        sha_candidate=""
-      fi
-      # Verify the commit has actual file changes (detect empty squash-merge)
-      if [ -n "$sha_candidate" ]; then
-        local new_tree old_tree
-        new_tree=$(git -C "$CODE_REPO" rev-parse HEAD^{tree} 2>/dev/null || true)
-        old_tree=$(git -C "$CODE_REPO" rev-parse HEAD~1^{tree} 2>/dev/null || true)
-        if [ "$new_tree" = "$old_tree" ]; then
-          warn "Empty squash commit detected (attempt $attempt) — agent changes were lost. Retrying..."
-          git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-          git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-          sleep $((1 + RANDOM % 3))
-          continue
-        fi
-      fi
-      if git -C "$CODE_REPO" push origin main 2>/dev/null; then
-        pushed=true
-        pushed_sha="$sha_candidate"
-        break
-      fi
-      warn "Push rejected (attempt $attempt/$max_attempts). Resetting and retrying..."
-      git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-      git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+    # Create detached worktree at origin/main
+    if ! git -C "$CODE_REPO" worktree add --detach --quiet "$merge_wt" origin/main 2>&1; then
+      warn "Failed to create merge worktree (attempt $attempt). Retrying..."
+      cleanup_merge_worktree "$merge_wt"
       sleep $((1 + RANDOM % 3))
       continue
     fi
 
-    log "    Squash had conflicts. Merging latest main into task branch..."
-    git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+    # Squash-merge the task branch into the merge worktree
+    if ! git -C "$merge_wt" merge --squash "$branch" 2>/dev/null; then
+      log "    Squash had conflicts. Merging latest main into task branch..."
+      git -C "$merge_wt" merge --abort 2>/dev/null || true
+      cleanup_merge_worktree "$merge_wt"
 
-    if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt" "$use_claude"; then
-      warn "Could not merge main into task branch on attempt $attempt. Aborting retries."
-      break
-    fi
-    reconcile_generated_files "$worktree"
-
-    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-
-    if ! git -C "$CODE_REPO" merge --squash "$branch" 2>/dev/null; then
-      log "    Squash still conflicted after re-merging. Retrying in ~3s..."
-      git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-      git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-      git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
-      sleep $((2 + RANDOM % 4))
+      if ! merge_main_into_branch "$worktree" "$short_id" "$model" "attempt $attempt" "$use_claude"; then
+        warn "Could not merge main into task branch on attempt $attempt. Aborting retries."
+        break
+      fi
+      reconcile_generated_files "$worktree"
+      sleep $((1 + RANDOM % 3))
       continue
     fi
 
-    git -C "$CODE_REPO" lfs checkout 2>/dev/null || true
-    pre_commit_sha=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
-    local commit_stderr_2
-    if ! commit_stderr_2=$(git -C "$CODE_REPO" commit -m "$commit_msg" 2>&1); then
-      warn "Commit failed after re-merge squash (attempt $attempt). Pre-commit hook may have rejected. Retrying..."
-      warn "Commit stderr: $commit_stderr_2"
+    # Ensure LFS-tracked files are real content, not pointers
+    git -C "$merge_wt" lfs checkout 2>/dev/null || true
+
+    # Commit (runs pre-commit hooks in the merge worktree)
+    local pre_commit_sha
+    pre_commit_sha=$(git -C "$merge_wt" rev-parse HEAD 2>/dev/null || true)
+    local commit_stderr
+    if ! commit_stderr=$(git -C "$merge_wt" commit -m "$commit_msg" 2>&1); then
+      warn "Commit failed after squash (attempt $attempt). Pre-commit hook may have rejected."
+      warn "Commit stderr: $commit_stderr"
+
       # Bail early if the same pre-commit error repeats — it won't self-resolve
-      if [ "$commit_stderr_2" = "$last_precommit_err" ]; then
+      if [ "$commit_stderr" = "$last_precommit_err" ]; then
         same_err_count=$((same_err_count + 1))
         if [ "$same_err_count" -ge 3 ]; then
-          warn "Same pre-commit error repeated $same_err_count times. Giving up to release merge lock."
+          warn "Same pre-commit error repeated $same_err_count times. Giving up."
+          cleanup_merge_worktree "$merge_wt"
           break
         fi
       else
-        last_precommit_err="$commit_stderr_2"
+        last_precommit_err="$commit_stderr"
         same_err_count=1
       fi
-      git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-      git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+
+      cleanup_merge_worktree "$merge_wt"
+
+      if ! merge_main_into_branch "$worktree" "$short_id" "$model" "pre-commit fixup attempt $attempt" "$use_claude"; then
+        warn "Could not merge main into task branch after pre-commit failure. Aborting retries."
+        break
+      fi
+      reconcile_generated_files "$worktree"
       sleep $((1 + RANDOM % 3))
       continue
     fi
-    sha_candidate=$(git -C "$CODE_REPO" rev-parse HEAD 2>/dev/null || true)
+
+    # Validate non-empty commit
+    local sha_candidate
+    sha_candidate=$(git -C "$merge_wt" rev-parse HEAD 2>/dev/null || true)
+    # If commit was a no-op (no changes), don't record a stale SHA
     if [ "$sha_candidate" = "$pre_commit_sha" ]; then
       sha_candidate=""
     fi
     # Verify the commit has actual file changes (detect empty squash-merge)
     if [ -n "$sha_candidate" ]; then
-      local new_tree2 old_tree2
-      new_tree2=$(git -C "$CODE_REPO" rev-parse HEAD^{tree} 2>/dev/null || true)
-      old_tree2=$(git -C "$CODE_REPO" rev-parse HEAD~1^{tree} 2>/dev/null || true)
-      if [ "$new_tree2" = "$old_tree2" ]; then
-        warn "Empty squash commit detected after re-merge (attempt $attempt) — agent changes were lost. Retrying..."
-        git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-        git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+      local new_tree old_tree
+      new_tree=$(git -C "$merge_wt" rev-parse "HEAD^{tree}" 2>/dev/null || true)
+      old_tree=$(git -C "$merge_wt" rev-parse "HEAD~1^{tree}" 2>/dev/null || true)
+      if [ "$new_tree" = "$old_tree" ]; then
+        warn "Empty squash commit detected (attempt $attempt) — agent changes were lost. Retrying..."
+        cleanup_merge_worktree "$merge_wt"
         sleep $((1 + RANDOM % 3))
         continue
       fi
     fi
-    if git -C "$CODE_REPO" push origin main 2>/dev/null; then
+
+    # ── Phase 2: Push under brief lock (~3s) ──
+
+    if ! _acquire_merge_lock; then
+      warn "Could not acquire merge lock after 120s. Skipping merge."
+      cleanup_merge_worktree "$merge_wt"
+      return 1
+    fi
+
+    # Check if origin/main has advanced since we based our merge
+    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+    local current_main
+    current_main=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
+
+    if [ "$current_main" != "$base_sha" ]; then
+      # Main advanced — our commit's parent is stale. Retry Phase 1.
+      _release_merge_lock
+      log "    Main advanced during merge. Retrying with new base..."
+      cleanup_merge_worktree "$merge_wt"
+      sleep $((RANDOM % 2))
+      continue
+    fi
+
+    # Push from merge worktree (detached HEAD → remote main)
+    local push_attempts=0
+    local push_ok=false
+    while [ "$push_attempts" -lt 3 ]; do
+      push_attempts=$((push_attempts + 1))
+      local push_stderr
+      if push_stderr=$(git -C "$merge_wt" push origin HEAD:refs/heads/main 2>&1); then
+        push_ok=true
+        break
+      fi
+      # Non-fast-forward means main advanced (race); anything else is transient
+      if echo "$push_stderr" | grep -qiE 'non-fast-forward|fetch first|rejected'; then
+        log "    Push rejected (non-fast-forward). Main advanced during push."
+        break
+      fi
+      warn "Push failed (transient, attempt $push_attempts/3): $push_stderr"
+      sleep 1
+    done
+
+    _release_merge_lock
+
+    if $push_ok; then
       pushed=true
       pushed_sha="$sha_candidate"
+      cleanup_merge_worktree "$merge_wt"
       break
     fi
 
-    warn "Push rejected after re-merge (attempt $attempt/$max_attempts). Retrying..."
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
+    # Push failed — clean up and retry from Phase 1
+    cleanup_merge_worktree "$merge_wt"
     sleep $((1 + RANDOM % 3))
   done
 
-  # Release the lock
-  _release_merge_lock
+  # Final cleanup in case we broke out of the loop
+  cleanup_merge_worktree "$merge_wt"
 
   if ! $pushed; then
-    git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-    git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
     return 1
   fi
 
@@ -793,7 +776,7 @@ run_task() {
     cleanup_worktree "$short_id"
 
     local wt_err
-    if ! wt_err=$(git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" main 2>&1); then
+    if ! wt_err=$(git -C "$CODE_REPO" worktree add --quiet "$worktree" -b "$branch" origin/main 2>&1); then
       warn "Failed to create worktree: $wt_err"
 
       # Track consecutive failures to avoid infinite retry loops (see 11abf605 incident).
@@ -1075,12 +1058,9 @@ if text_parts:
   # --- Squash-merge task branch into main and push ---
   MERGE_AND_PUSH_SHA=""
   if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg" "$use_claude"; then
-    git -C "$CODE_REPO" merge --abort 2>/dev/null || true
-    git -C "$CODE_REPO" rebase --abort 2>/dev/null || true
+    # merge_and_push uses its own disposable worktree, so CODE_REPO is clean.
+    # Just ensure we have the latest remote refs.
     git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" checkout main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" reset --hard origin/main --quiet 2>/dev/null || true
-    git -C "$CODE_REPO" clean -fd --quiet 2>/dev/null || true
     if [[ -n "$executor" ]]; then
       # Script task: increment merge_attempt_count, free for retry or fail permanently
       local attempt_count
