@@ -274,7 +274,7 @@ class Index:
             t["status"] = row[1]
             t["claimed_by"] = row[2]
             t["claimed_at"] = row[3]
-            t["completed_at"] = row[4]
+            t["completed_at"] = row[4] or (task_completed_at(t) if row[1] in ("done", "failed") else None)
             t["created_at"] = row[5]
             t["updated_at"] = row[6]
             t["parent_task"] = t.get("created_by")
