@@ -446,7 +446,7 @@ class Index:
             ready.append(task)
 
         # Spread siblings apart: prefer tasks whose parent does NOT already
-        # have a claimed (in-progress) task.  This reduces merge conflicts
+        # have a claimed task.  This reduces merge conflicts
         # when multiple workers poll at the same time.
         in_progress_parents: set[str] = set()
         for (cby,) in self._conn.execute(
