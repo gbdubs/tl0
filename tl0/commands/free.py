@@ -1,4 +1,4 @@
-"""Free a task — reset it from claimed/in-progress/stuck back to pending."""
+"""Free a task — reset it from claimed back to pending."""
 
 import argparse
 import json

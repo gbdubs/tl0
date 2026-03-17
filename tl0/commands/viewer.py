@@ -191,9 +191,8 @@ body {
 .chip.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
 .chip[data-status="pending"].active   { background:#fff7ed; color:#c2410c; border-color:#fb923c; }
 .chip[data-status="claimed"].active   { background:#eff6ff; color:#1d4ed8; border-color:#3b82f6; }
-.chip[data-status="in-progress"].active { background:#f0fdf4; color:#15803d; border-color:#4ade80; }
 .chip[data-status="done"].active      { background:#f0fdf4; color:#166534; border-color:#86efac; }
-.chip[data-status="stuck"].active     { background:#fff1f2; color:#be123c; border-color:#fb7185; }
+.chip[data-status="failed"].active    { background:#fff1f2; color:#be123c; border-color:#fb7185; }
 
 /* Tag filters */
 #tag-section {
@@ -269,11 +268,10 @@ body {
   width: 7px; min-width: 7px; height: 7px; border-radius: 50%;
   margin-top: 4px; flex-shrink: 0;
 }
-.t-dot.pending     { background: #fb923c; }
-.t-dot.claimed     { background: #3b82f6; }
-.t-dot.in-progress { background: #22c55e; }
-.t-dot.done        { background: #86efac; }
-.t-dot.stuck       { background: #f87171; }
+.t-dot.pending  { background: #fb923c; }
+.t-dot.claimed  { background: #3b82f6; }
+.t-dot.done     { background: #86efac; }
+.t-dot.failed   { background: #f87171; }
 
 .t-body { flex: 1; min-width: 0; }
 .t-title {
@@ -394,7 +392,7 @@ body {
   padding: 12px; font-size: 13px;
   line-height: 1.65; color: var(--text);
 }
-.stuck-banner {
+.task-banner {
   background: #fff1f2; border-left: 3px solid #f87171;
   padding: 10px 12px; border-radius: 4px; font-size: 12px;
   color: #be123c; margin-bottom: 14px;
@@ -793,9 +791,8 @@ mark {
         <span class="chip active" data-status="all">All</span>
         <span class="chip" data-status="pending">Pending</span>
         <span class="chip" data-status="claimed">Claimed</span>
-        <span class="chip" data-status="in-progress">In Progress</span>
         <span class="chip" data-status="done">Done</span>
-        <span class="chip" data-status="stuck">Stuck</span>
+        <span class="chip" data-status="failed">Failed</span>
       </div>
       <div class="chip-row" id="model-chips">
         <span class="chip active" data-model="all">All Models</span>
@@ -1040,7 +1037,7 @@ async function loadTasks() {
 let _pollTimer = null;
 function schedulePoll() {
   if (_pollTimer) clearTimeout(_pollTimer);
-  const hasActive = allTasks.some(t => t.status === 'pending' || t.status === 'claimed' || t.status === 'in-progress');
+  const hasActive = allTasks.some(t => t.status === 'pending' || t.status === 'claimed');
   if (hasActive) _pollTimer = setTimeout(loadTasks, 30000);
 }
 
@@ -1287,7 +1284,7 @@ async function refresh() {
 function updateStats() {
   const counts = {};
   allTasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
-  const parts = ['done','in-progress','claimed','pending','stuck']
+  const parts = ['done','claimed','pending','failed']
     .filter(s => counts[s])
     .map(s => `${counts[s]} ${s}`);
   document.getElementById('stats').textContent = `${allTasks.length} tasks · ${parts.join(' · ')}`;
@@ -1811,14 +1808,11 @@ function renderDetail(id) {
   html += `<button class="delete-task-btn" onclick="confirmDelete('${escAttr(task.id)}')">Delete</button>`;
   html += `</div>`;
 
-  if (task.status === 'stuck') {
-    html += `<div class="stuck-banner" style="margin-top:10px">⚠️ This task is stuck. A resolution task should be created.</div>`;
-  }
   if (openBlockers.length > 0) {
-    html += `<div class="stuck-banner" style="margin-top:10px;background:#fff7ed;border-color:#fb923c;color:#c2410c">⛔ Blocked by ${openBlockers.length} unfinished task${openBlockers.length > 1 ? 's' : ''}.</div>`;
+    html += `<div class="task-banner" style="margin-top:10px;background:#fff7ed;border-color:#fb923c;color:#c2410c">⛔ Blocked by ${openBlockers.length} unfinished task${openBlockers.length > 1 ? 's' : ''}.</div>`;
   }
   if (task.status === 'failed' && task.failure_reason) {
-    html += `<div class="stuck-banner" style="margin-top:10px;background:#fef2f2;border-color:#ef4444;color:#b91c1c">❌ Failed: ${esc(task.failure_reason)}</div>`;
+    html += `<div class="task-banner" style="margin-top:10px;background:#fef2f2;border-color:#ef4444;color:#b91c1c">❌ Failed: ${esc(task.failure_reason)}</div>`;
   }
   html += `</div>`;
 
@@ -2019,10 +2013,10 @@ function buildSourceTree() {
 function statusClass(s) { return s; }   // CSS class equals status string
 
 function statusBg(s) {
-  return {pending:'#fff7ed',claimed:'#eff6ff','in-progress':'#f0fdf4',done:'#f0fdf4',stuck:'#fff1f2'}[s] || '#f3f4f6';
+  return {pending:'#fff7ed',claimed:'#eff6ff',done:'#f0fdf4',failed:'#fff1f2'}[s] || '#f3f4f6';
 }
 function statusFg(s) {
-  return {pending:'#c2410c',claimed:'#1d4ed8','in-progress':'#15803d',done:'#166534',stuck:'#be123c'}[s] || '#6b7280';
+  return {pending:'#c2410c',claimed:'#1d4ed8',done:'#166534',failed:'#be123c'}[s] || '#6b7280';
 }
 function esc(s) {
   if (!s) return '';
@@ -2046,13 +2040,12 @@ function agoStr(iso) {
 
 // ── Chart ────────────────────────────────────────────────────
 const STATUS_COLORS = {
-  done:          '#86efac',
-  'in-progress': '#22c55e',
-  claimed:       '#3b82f6',
-  pending:       '#fb923c',
-  stuck:         '#f87171',
+  done:    '#86efac',
+  claimed: '#3b82f6',
+  pending: '#fb923c',
+  failed:  '#f87171',
 };
-const STATUS_ORDER = ['done', 'in-progress', 'claimed', 'pending', 'stuck'];
+const STATUS_ORDER = ['done', 'claimed', 'pending', 'failed'];
 
 // ── Chart time range filter ──────────────────────────────────
 let _chartTimeRange = 'all';    // 'all', 'supervisor', '5m', '15m', '30m', '1h', '3h', '6h', '12h', '24h', 'custom'
@@ -2122,29 +2115,27 @@ function buildTimeline(tasks) {
     const completed = task.completed_at ? new Date(task.completed_at).getTime() : NaN;
     if (isNaN(created)) return;
 
-    // Determine the "claimed" display status based on current task status
-    let claimedStatus = 'claimed';
-    if (task.status === 'stuck') claimedStatus = 'stuck';
-    else if (task.status === 'in-progress' || task.status === 'done') claimedStatus = 'in-progress';
+    // Determine the terminal status for a completed task
+    const terminalStatus = (task.status === 'failed') ? 'failed' : 'done';
 
     if (!isNaN(completed)) {
-      // Task went: pending -> claimedStatus -> done
+      // Task went: pending -> claimed -> done/failed
       if (!isNaN(claimed)) {
-        events.push({ time: created, status: 'pending', delta: 1 });
-        events.push({ time: claimed, status: 'pending', delta: -1 });
-        events.push({ time: claimed, status: claimedStatus, delta: 1 });
-        events.push({ time: completed, status: claimedStatus, delta: -1 });
-        events.push({ time: completed, status: 'done', delta: 1 });
+        events.push({ time: created,   status: 'pending',       delta: 1 });
+        events.push({ time: claimed,   status: 'pending',       delta: -1 });
+        events.push({ time: claimed,   status: 'claimed',       delta: 1 });
+        events.push({ time: completed, status: 'claimed',       delta: -1 });
+        events.push({ time: completed, status: terminalStatus,  delta: 1 });
       } else {
-        events.push({ time: created, status: 'pending', delta: 1 });
-        events.push({ time: completed, status: 'pending', delta: -1 });
-        events.push({ time: completed, status: 'done', delta: 1 });
+        events.push({ time: created,   status: 'pending',       delta: 1 });
+        events.push({ time: completed, status: 'pending',       delta: -1 });
+        events.push({ time: completed, status: terminalStatus,  delta: 1 });
       }
     } else if (!isNaN(claimed)) {
-      // Task went: pending -> claimedStatus (still active)
+      // Task went: pending -> claimed (still active)
       events.push({ time: created, status: 'pending', delta: 1 });
       events.push({ time: claimed, status: 'pending', delta: -1 });
-      events.push({ time: claimed, status: claimedStatus, delta: 1 });
+      events.push({ time: claimed, status: 'claimed', delta: 1 });
     } else {
       // Task is still pending
       events.push({ time: created, status: 'pending', delta: 1 });
@@ -2157,13 +2148,13 @@ function buildTimeline(tasks) {
   events.sort((a, b) => a.time - b.time || a.delta - b.delta);
 
   // Sweep: accumulate counts, emit a timeline point at each unique timestamp
-  const counts = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
+  const counts = { pending: 0, claimed: 0, done: 0, failed: 0 };
   const timeline = [];
   let i = 0;
 
   // Baseline counts to subtract when a time filter is active, so the y-axis
   // shows progress within the window (e.g. "done" starts at 0, not 10,000).
-  let baseline = { pending: 0, claimed: 0, 'in-progress': 0, done: 0, stuck: 0 };
+  let baseline = { pending: 0, claimed: 0, done: 0, failed: 0 };
 
   if (timeFloor > 0) {
     // Pre-compute state at timeFloor by processing all events before it
@@ -2258,7 +2249,7 @@ function renderChart() {
   function sx(x) { return pad.left + ((x - xMin) / xRange) * cw; }
   function sy(y) { return pad.top + ch - (y / yMax) * ch; }
 
-  // Build stacked areas (bottom to top, order: done, in-progress, claimed, pending, stuck)
+  // Build stacked areas (bottom to top, order: done, claimed, pending, failed)
   const areas = {};
   STATUS_ORDER.forEach((status, si) => {
     let points = '';
@@ -3109,10 +3100,8 @@ function _fmtCell(task, ts, col) {
   switch (col.key) {
     case 'title':
       return `<td class="task-name-cell" onclick="tableClickTask('${task.id}')" title="${(task.title||'').replace(/"/g,'&quot;')}">${_esc(task.title || '(untitled)')}</td>`;
-    case 'status': {
-      const cls = val === 'in-progress' ? 'in-progress' : val;
-      return `<td ${fAttr} style="cursor:pointer"><span class="badge badge-${cls}" style="${_statusBadgeStyle(val)}">${val}</span></td>`;
-    }
+    case 'status':
+      return `<td ${fAttr} style="cursor:pointer"><span class="badge badge-${val}" style="${_statusBadgeStyle(val)}">${val}</span></td>`;
     case 'model':
       return val ? `<td ${fAttr} style="cursor:pointer"><span class="badge badge-${val}">${val}</span></td>` : `<td ${fAttr} style="cursor:pointer">—</td>`;
     case 'duration':
@@ -3155,11 +3144,10 @@ function _fmtCell(task, ts, col) {
 
 function _statusBadgeStyle(status) {
   const map = {
-    'pending':     'background:#fff7ed;color:#c2410c;',
-    'claimed':     'background:#eff6ff;color:#1d4ed8;',
-    'in-progress': 'background:#f0fdf4;color:#15803d;',
-    'done':        'background:#f0fdf4;color:#166534;',
-    'stuck':       'background:#fff1f2;color:#be123c;',
+    'pending': 'background:#fff7ed;color:#c2410c;',
+    'claimed': 'background:#eff6ff;color:#1d4ed8;',
+    'done':    'background:#f0fdf4;color:#166534;',
+    'failed':  'background:#fff1f2;color:#be123c;',
   };
   return map[status] || '';
 }

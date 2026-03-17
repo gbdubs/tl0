@@ -544,12 +544,10 @@ body {
   font-size: 11px;
   font-weight: 500;
 }
-.badge-pending    { background: #e5e7eb; color: #374151; }
-.badge-claimed    { background: #dbeafe; color: #1e40af; }
-.badge-in-progress { background: #fef3c7; color: #92400e; }
-.badge-done       { background: #d1fae5; color: #065f46; }
-.badge-stuck      { background: #fee2e2; color: #991b1b; }
-.badge-failed     { background: #fecaca; color: #7f1d1d; }
+.badge-pending { background: #e5e7eb; color: #374151; }
+.badge-claimed { background: #dbeafe; color: #1e40af; }
+.badge-done    { background: #d1fae5; color: #065f46; }
+.badge-failed  { background: #fecaca; color: #7f1d1d; }
 
 /* Phase badges */
 .phase {
@@ -1027,7 +1025,7 @@ function setWorkerSort(col) {
 
 function renderTaskSummary() {
   const el = document.getElementById('task-summary');
-  const order = ['pending', 'claimed', 'in-progress', 'done', 'failed', 'stuck'];
+  const order = ['pending', 'claimed', 'done', 'failed'];
   const parts = [];
   for (const s of order) {
     const n = taskCounts[s] || 0;
@@ -1096,7 +1094,7 @@ document.getElementById('btn-drain').onclick = async () => {
   await apiPost('/api/drain');
 };
 document.getElementById('btn-kill').onclick = async () => {
-  if (!confirm('Kill all running loops immediately?\n\nTasks in progress will be left in claimed/in-progress state.\nUse "Free All" button to reset them.')) return;
+  if (!confirm('Kill all running loops immediately?\n\nActive tasks will be left in claimed state.\nUse "Free All" button to reset them.')) return;
   await apiPost('/api/kill-all');
 };
 document.getElementById('btn-free-all').onclick = async () => {
