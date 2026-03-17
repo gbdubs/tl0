@@ -93,9 +93,9 @@ def task_last_claimed_at(task: dict) -> str | None:
 
 
 def task_completed_at(task: dict) -> str | None:
-    """Return the timestamp of the done event, or None."""
+    """Return the timestamp of the terminal (done or failed) event, or None."""
     for event in reversed(task.get("events", [])):
-        if event["type"] == "done":
+        if event["type"] in ("done", "failed"):
             return event["at"]
     return None
 
