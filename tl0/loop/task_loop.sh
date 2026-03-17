@@ -411,10 +411,32 @@ cleanup_merge_worktree() {
   git -C "$CODE_REPO" worktree prune 2>/dev/null || true
 }
 
+_FETCH_MAIN_INTERVAL=30  # seconds between fetches (shared across all loops)
+_FETCH_MAIN_STAMP="$WORKTREE_BASE/.last-main-fetch"
+
+# Fetch origin/main only if no loop has fetched recently.  All loops share
+# the same .git dir, so one fetch updates origin/main for everyone.
+_maybe_fetch_main() {
+  local now last_fetch age
+  now=$(date +%s)
+  last_fetch=$(cat "$_FETCH_MAIN_STAMP" 2>/dev/null || echo 0)
+  age=$((now - last_fetch))
+  if [ "$age" -ge "$_FETCH_MAIN_INTERVAL" ]; then
+    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+    echo "$now" > "$_FETCH_MAIN_STAMP" 2>/dev/null || true
+  fi
+}
+
+# Always fetch, unconditionally (for recovery paths / under lock).
+_force_fetch_main() {
+  git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+  echo "$(date +%s)" > "$_FETCH_MAIN_STAMP" 2>/dev/null || true
+}
+
 pull_main() {
   # Just fetch — merge_and_push no longer operates on CODE_REPO's working
   # directory, so there's no shared state to protect with a lock.
-  git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+  _maybe_fetch_main
 }
 
 reconcile_generated_files() {
@@ -553,8 +575,8 @@ merge_and_push() {
     # Clean up any previous merge worktree from a failed attempt
     cleanup_merge_worktree "$merge_wt"
 
-    # Fetch latest main and record the base SHA
-    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+    # Fetch latest main (throttled — skips if another loop fetched recently)
+    _maybe_fetch_main
     local base_sha
     base_sha=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
 
@@ -665,7 +687,7 @@ merge_and_push() {
 
       # Non-fast-forward → main advanced. Try fast-rebase under the lock.
       if echo "$push_stderr" | grep -qiE 'non-fast-forward|fetch first|rejected'; then
-        git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+        _force_fetch_main
         local new_main
         new_main=$(git -C "$CODE_REPO" rev-parse origin/main 2>/dev/null)
 
@@ -1028,7 +1050,7 @@ if text_parts:
   # Fetch latest main without touching CODE_REPO's working directory or index.
   # Using pull_main here (checkout + reset) would destroy a concurrent
   # merge_and_push's staging area in the shared CODE_REPO.
-  git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+  _maybe_fetch_main
 
   local use_claude="true"
   [[ -n "$executor" ]] && use_claude="false"
@@ -1094,7 +1116,7 @@ if text_parts:
   if ! merge_and_push "$worktree" "$short_id" "$branch" "$model" "$commit_msg" "$use_claude"; then
     # merge_and_push uses its own disposable worktree, so CODE_REPO is clean.
     # Just ensure we have the latest remote refs.
-    git -C "$CODE_REPO" fetch origin main --quiet 2>/dev/null || true
+    _force_fetch_main
     if [[ -n "$executor" ]]; then
       # Script task: increment merge_attempt_count, free for retry or fail permanently
       local attempt_count
