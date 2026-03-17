@@ -2131,7 +2131,7 @@ function buildTimeline(tasks) {
         events.push({ time: completed, status: 'pending',       delta: -1 });
         events.push({ time: completed, status: terminalStatus,  delta: 1 });
       }
-    } else if (!isNaN(claimed)) {
+    } else if (!isNaN(claimed) && task.status === 'claimed') {
       // Task went: pending -> claimed (still active)
       events.push({ time: created, status: 'pending', delta: 1 });
       events.push({ time: claimed, status: 'pending', delta: -1 });
