@@ -2352,8 +2352,9 @@ function renderChart() {
       crosshair.setAttribute('opacity', '0.5');
     });
     rect.addEventListener('mousemove', e => {
-      tooltip.style.left = (e.clientX + 14) + 'px';
-      tooltip.style.top = (e.clientY - 10) + 'px';
+      const ttWidth = tooltip.offsetWidth;
+      tooltip.style.left = (e.clientX - ttWidth - 14) + 'px';
+      tooltip.style.top = (e.clientY + 10) + 'px';
     });
     rect.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
