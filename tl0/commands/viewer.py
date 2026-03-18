@@ -3675,15 +3675,44 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
         except json.JSONDecodeError:
             continue
 
-    # Extract total duration from result event for timestamp estimation.
-    # Since the JSONL file is written progressively in real-time, we use each
-    # event's position (index / total) * duration_ms as an approximate timestamp.
+    # Build per-event timestamp offsets (ms from start of transcript).
+    # Prefer real ISO 8601 "timestamp" fields when present on events;
+    # fall back to position-based interpolation using the result event's duration_ms.
+    from datetime import datetime
     total_events = len(events)
+
+    # Pass 1: extract real timestamps where available.
+    _raw_epoch_ms: list[float | None] = []
+    for e in events:
+        ts_str = e.get("timestamp", "")
+        if ts_str:
+            try:
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                _raw_epoch_ms.append(dt.timestamp() * 1000)
+            except (ValueError, OSError):
+                _raw_epoch_ms.append(None)
+        else:
+            _raw_epoch_ms.append(None)
+
+    _first_ts = next((t for t in _raw_epoch_ms if t is not None), None)
+    _has_real_ts = _first_ts is not None
+
+    # Pass 2: also grab duration_ms from the result event for fallback.
     duration_ms = 0
     for e in reversed(events):
         if e.get("type") == "result":
             duration_ms = e.get("duration_ms", 0)
             break
+
+    # Build final offset array.
+    _evt_timestamps_ms: list[int] = []
+    for idx, raw in enumerate(_raw_epoch_ms):
+        if _has_real_ts and raw is not None:
+            _evt_timestamps_ms.append(int(raw - _first_ts))
+        elif total_events > 1 and duration_ms > 0:
+            _evt_timestamps_ms.append(int(idx / (total_events - 1) * duration_ms))
+        else:
+            _evt_timestamps_ms.append(0)
 
     # Extract cwd from init event
     cwd = ""
@@ -3802,10 +3831,10 @@ def _build_transcript_timeline(task_id: str, filename: str) -> list:
     }
 
     def _evt_timestamp_ms(evt_idx: int) -> int:
-        """Estimate timestamp in ms based on event position within the file."""
-        if total_events <= 1 or duration_ms <= 0:
-            return 0
-        return int(evt_idx / (total_events - 1) * duration_ms)
+        """Return timestamp in ms relative to the first event."""
+        if evt_idx < len(_evt_timestamps_ms):
+            return _evt_timestamps_ms[evt_idx]
+        return 0
 
     for msg in messages:
         msg_evt_idx = msg.get("_evt_idx", 0)
