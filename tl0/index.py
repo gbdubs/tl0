@@ -414,7 +414,7 @@ class Index:
         summary["loop_log_lines"] = loop_log_lines
         return summary
 
-    def find_ready(self, model: str | None = None, tags: list[str] | None = None) -> list[dict]:
+    def find_ready(self, model: str | None = None, tags: list[str] | None = None, exclude_tags: list[str] | None = None) -> list[dict]:
         """Find tasks that are pending with all blockers done."""
         self.sync_tasks()  # throttled
 
@@ -441,6 +441,8 @@ class Index:
             if model and task.get("model") != model:
                 continue
             if tags and not all(t in task.get("tags", []) for t in tags):
+                continue
+            if exclude_tags and any(t in task.get("tags", []) for t in exclude_tags):
                 continue
 
             ready.append(task)
