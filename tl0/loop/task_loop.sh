@@ -180,6 +180,7 @@ for d in [p] + list(p.parents):
 # Defaults
 MODEL_FILTER=""
 TAG_FILTER=""
+EXCLUDE_TAG_FILTER=""
 ONCE=false
 MAX_TASKS=0  # 0 = unlimited
 DRY_RUN=false
@@ -193,6 +194,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)      MODEL_FILTER="$2"; shift 2 ;;
     --tag)        TAG_FILTER="$2"; shift 2 ;;
+    --exclude-tag) EXCLUDE_TAG_FILTER="$2"; shift 2 ;;
     --once)       ONCE=true; shift ;;
     --max-tasks)  MAX_TASKS="$2"; shift 2 ;;
     --dry-run)    DRY_RUN=true; shift ;;
@@ -391,6 +393,7 @@ mkdir -p "$WORKTREE_BASE"
 FIND_ARGS=(--limit 1)
 [[ -n "$MODEL_FILTER" ]] && FIND_ARGS+=(--model "$MODEL_FILTER")
 [[ -n "$TAG_FILTER" ]]   && FIND_ARGS+=(--tag "$TAG_FILTER")
+[[ -n "$EXCLUDE_TAG_FILTER" ]] && FIND_ARGS+=(--exclude-tag "$EXCLUDE_TAG_FILTER")
 
 cleanup_worktree() {
   local short_id="$1"
@@ -1249,7 +1252,7 @@ log "Task loop starting (agent=$AGENT_ID)"
 log "  Code repo: $CODE_REPO"
 log "  Worktrees: $WORKTREE_BASE"
 log "  Prompt:    $TASK_PROMPT"
-log "  Filters: model=${MODEL_FILTER:-any} tag=${TAG_FILTER:-any}"
+log "  Filters: model=${MODEL_FILTER:-any} tag=${TAG_FILTER:-any} exclude-tag=${EXCLUDE_TAG_FILTER:-none}"
 [[ "$MAX_TASKS" -gt 0 ]] && log "  Max tasks: $MAX_TASKS"
 log ""
 

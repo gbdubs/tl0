@@ -1725,6 +1725,8 @@ def main(argv=None):
                         help='Model filter passed to each task loop')
     parser.add_argument('--tag', action='append', default=[],
                         help='Tag filter passed to each task loop (repeatable)')
+    parser.add_argument('--exclude-tag', action='append', default=[],
+                        help='Exclude tasks with this tag (repeatable)')
     parser.add_argument('--prompt', default='',
                         help='Execution prompt path passed to each task loop')
     parser.add_argument('--poll', type=int, default=30,
@@ -1746,6 +1748,8 @@ def main(argv=None):
         base_loop_args += ["--model", args.model]
     for tag in args.tag:
         base_loop_args += ["--tag", tag]
+    for tag in args.exclude_tag:
+        base_loop_args += ["--exclude-tag", tag]
     if args.prompt:
         base_loop_args += ["--prompt", args.prompt]
     base_loop_args += ["--poll", str(args.poll)]

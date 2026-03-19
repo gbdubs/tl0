@@ -8,12 +8,13 @@ import random
 def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Find claimable tasks")
     parser.add_argument("--tag", action="append", default=[], help="Filter by tag (can repeat)")
+    parser.add_argument("--exclude-tag", action="append", default=[], help="Exclude tasks with this tag (can repeat)")
     parser.add_argument("--model", default=None, help="Filter by model")
     parser.add_argument("--limit", type=int, default=0, help="Max results (0 = all)")
     args = parser.parse_args(argv)
 
     from tl0.common import _get_index
-    ready = _get_index().find_ready(model=args.model, tags=args.tag or None)
+    ready = _get_index().find_ready(model=args.model, tags=args.tag or None, exclude_tags=args.exclude_tag or None)
 
     if args.limit > 0:
         # Shuffle before limiting so concurrent workers don't all pick the
