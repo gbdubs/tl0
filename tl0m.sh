@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Standalone entry point for tl0m (machine-facing CLI).
-# Usage: ./tl0m.sh <command> [args...]
-# Or symlink: ln -s /path/to/tl0/tl0m.sh /usr/local/bin/tl0m
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHONPATH="$SCRIPT_DIR" exec python3 -m tl0.cli_machine "$@"
+# tl0m has been deprecated. Use tl1m instead.
+echo "Error: tl0 has been deprecated. Please use tl1 instead." >&2
+echo "" >&2
+echo "  tl0m has been replaced by tl1m." >&2
+echo "  For migration details, see the tl1 documentation." >&2
+exit 1

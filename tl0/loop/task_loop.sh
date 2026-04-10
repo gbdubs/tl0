@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+echo "Error: tl0 has been deprecated. Please use tl1 instead." >&2
+echo "" >&2
+echo "  The tl0 task loop has been replaced by tl1." >&2
+echo "  For migration details, see the tl1 documentation." >&2
+exit 1
+
 #
 # tl0 loop — Continuously claim tasks, implement them in worktrees, merge back.
 #
