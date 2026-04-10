@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Standalone entry point for tl0h (human-facing CLI).
-# Usage: ./tl0h.sh <command> [args...]
-# Or symlink: ln -s /path/to/tl0/tl0h.sh /usr/local/bin/tl0h
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PYTHONPATH="$SCRIPT_DIR" exec python3 -m tl0.cli_human "$@"
+# tl0h has been deprecated. Use tl1h instead.
+echo "Error: tl0 has been deprecated. Please use tl1 instead." >&2
+echo "" >&2
+echo "  tl0h has been replaced by tl1h." >&2
+echo "  For migration details, see the tl1 documentation." >&2
+exit 1
